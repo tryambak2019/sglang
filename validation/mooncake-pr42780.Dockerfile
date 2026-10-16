@@ -2,6 +2,25 @@
 
 ARG SGLANG_BASE_IMAGE=lmsysorg/sglang@sha256:e20a28a4badee7d3de71881e7c2c160c7079465bf1ac21edec31a99c2602507d
 
+# Keep PR acquisition independent of the expensive Mooncake compilation. A PR
+# update therefore invalidates only this small stage and the final image layer.
+FROM ${SGLANG_BASE_IMAGE} AS pr-source
+
+ARG SGLANG_PR_COMMIT=a73ca55f23bff0a3078da00f897d41e9b843f491
+ARG SGLANG_PR_ARCHIVE_SHA256=48581d1cd796dc353aaa39ba23b12b9f7229d0ccf478583f60d5f6288506e931
+
+USER root
+WORKDIR /opt/pr-source
+RUN set -eux; \
+    archive=/tmp/sglang-pr.tar.gz; \
+    curl -fL --retry 3 --connect-timeout 15 --max-time 300 \
+      -o "${archive}" \
+      "https://github.com/sgl-project/sglang/archive/${SGLANG_PR_COMMIT}.tar.gz"; \
+    echo "${SGLANG_PR_ARCHIVE_SHA256}  ${archive}" | sha256sum -c -; \
+    tar -xzf "${archive}" --strip-components=1 -C /opt/pr-source; \
+    printf '%s\n' "${SGLANG_PR_COMMIT}" > /opt/pr-source/.pr-head; \
+    test -f python/sglang/srt/layers/moe/token_dispatcher/nixl.py
+
 # Build against the exact SGLang runtime, not merely the same nominal
 # Torch/CUDA versions. This makes the compiled PG adapter ABI-specific to the
 # image that will run the recovery validation.
@@ -64,25 +83,32 @@ FROM ${SGLANG_BASE_IMAGE} AS runtime
 
 ARG MOONCAKE_BUILD_COMMIT=1c54e233a22404692efd312739db749991d8d757
 ARG SGLANG_BASE_IMAGE_DIGEST=sha256:e20a28a4badee7d3de71881e7c2c160c7079465bf1ac21edec31a99c2602507d
+ARG SGLANG_PR_COMMIT=a73ca55f23bff0a3078da00f897d41e9b843f491
 
 ENV MOONCAKE_BUILD_COMMIT=${MOONCAKE_BUILD_COMMIT} \
-    SGLANG_BASE_IMAGE_DIGEST=${SGLANG_BASE_IMAGE_DIGEST}
+    SGLANG_BASE_IMAGE_DIGEST=${SGLANG_BASE_IMAGE_DIGEST} \
+    SGLANG_PR_COMMIT=${SGLANG_PR_COMMIT} \
+    PYTHONPATH=/opt/pr-source/python
 
 LABEL org.opencontainers.image.title="SGLang PR 42780 Mooncake validation dependency" \
-      org.opencontainers.image.description="Official SGLang image with only Mooncake replaced for fixed-slot recovery validation" \
+      org.opencontainers.image.description="Official SGLang base with pinned Mooncake and PR 42780 source for fixed-slot recovery validation" \
       org.opencontainers.image.base.digest=${SGLANG_BASE_IMAGE_DIGEST} \
-      org.opencontainers.image.revision=${MOONCAKE_BUILD_COMMIT} \
+      org.opencontainers.image.revision=${SGLANG_PR_COMMIT} \
+      ai.mooncake.source.revision=${MOONCAKE_BUILD_COMMIT} \
       org.opencontainers.image.source="https://github.com/tryambak2019/sglang"
 
 USER root
 COPY --from=mooncake-builder /opt/mooncake-src/mooncake-wheel/dist/ /tmp/mooncake-wheel/
 COPY --from=mooncake-builder /root/.cache/mooncake/pg_jit/ /root/.cache/mooncake/pg_jit/
+COPY --from=pr-source /opt/pr-source/ /opt/pr-source/
 
 RUN set -eux; \
     python -m pip uninstall -y mooncake-transfer-engine mooncake-transfer-engine-cuda13 || true; \
     python -m pip install --no-cache-dir --no-deps /tmp/mooncake-wheel/*.whl; \
     python -c 'import torch; assert torch.__version__.split("+")[0] == "2.14.1", torch.__version__'; \
     python -m mooncake.pg --report; \
+    test "$(cat /opt/pr-source/.pr-head)" = "${SGLANG_PR_COMMIT}"; \
+    python -c 'import pathlib, sglang; p=pathlib.Path(sglang.__file__).resolve(); assert str(p).startswith("/opt/pr-source/python/"), p; print(p)'; \
     test -n "${MOONCAKE_BUILD_COMMIT}"; \
     test -n "${SGLANG_BASE_IMAGE_DIGEST}"
 
