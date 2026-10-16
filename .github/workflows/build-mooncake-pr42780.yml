@@ -1,0 +1,107 @@
+name: Build PR 42780 Mooncake dependency image
+
+on:
+  push:
+    branches:
+      - validation/pr42780-mooncake-image
+    paths:
+      - validation/mooncake-pr42780.Dockerfile
+      - .github/workflows/build-mooncake-pr42780.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+concurrency:
+  group: pr42780-mooncake-image
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/sglang-mooncake-recovery
+  IMAGE_TAG: pr42780-mooncake-1c54e233
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - name: Check out validation branch
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Free runner disk
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push immutable dependency image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: validation/mooncake-pr42780.Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+            ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Resolve the runnable amd64 manifest digest
+        id: digest
+        shell: bash
+        env:
+          INDEX_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          image_ref="${IMAGE_NAME}@${INDEX_DIGEST}"
+          manifest="$(docker buildx imagetools inspect "$image_ref" --raw)"
+          amd64_digest="$(jq -r '
+            if has("manifests") then
+              [.manifests[]
+                | select(.platform.os == "linux")
+                | select(.platform.architecture == "amd64")
+                | select((.annotations["vnd.docker.reference.type"] // "") != "attestation-manifest")
+                | .digest][0] // empty
+            else empty end
+          ' <<<"$manifest")"
+          if [[ -z "$amd64_digest" ]]; then
+            amd64_digest="$INDEX_DIGEST"
+          fi
+          [[ "$amd64_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "amd64_digest=$amd64_digest" >> "$GITHUB_OUTPUT"
+          {
+            echo '## Julien run inputs'
+            echo
+            echo '```bash'
+            echo "SGLANG_IMAGE=${IMAGE_NAME}@${amd64_digest}"
+            echo "EXPECTED_IMAGE_ID=${amd64_digest}"
+            echo '```'
+            echo
+            echo "Build index digest: \`${INDEX_DIGEST}\`"
+            echo "Mooncake commit: \`1c54e233a22404692efd312739db749991d8d757\`"
+            echo "SGLang base digest: \`sha256:e20a28a4badee7d3de71881e7c2c160c7079465bf1ac21edec31a99c2602507d\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
