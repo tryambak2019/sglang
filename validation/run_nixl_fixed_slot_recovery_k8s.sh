@@ -9,10 +9,9 @@
 #
 # The script requires a digest-pinned image derived from the official SGLang
 # CUDA image. It must replace Mooncake with a wheel/cache built from the pinned
-# Mooncake commit against that image's Torch/CUDA stack. The script downloads
-# the exact PR source in each pod, verifies its checksum, and places that
-# source first on PYTHONPATH. This is a validation overlay, not a production
-# image built wholly from the PR.
+# Mooncake commit against that image's Torch/CUDA stack and contain the exact
+# PR source at /opt/pr-source with that source first on PYTHONPATH. The image
+# digest is the immutable validation artifact; Pods do not download PR source.
 #
 # Final verdicts are conservative:
 #   YES          correlated recovery reached ready and recovered-rank inference passed
@@ -78,8 +77,6 @@ readonly APP="sglang-nixl-recovery"
 readonly OFFICIAL_BASE_IMAGE_DIGEST="sha256:e20a28a4badee7d3de71881e7c2c160c7079465bf1ac21edec31a99c2602507d"
 readonly EXPECTED_BASE_COMMIT="e6072935bfa1036d4e20e8ed042ce1ff09872f57"
 readonly DEFAULT_EXPECTED_MOONCAKE_COMMIT="1c54e233a22404692efd312739db749991d8d757"
-readonly PR_SOURCE_URL="https://github.com/sgl-project/sglang/archive/${EXPECTED_PR_SHA}.tar.gz"
-readonly PR_SOURCE_SHA256="48581d1cd796dc353aaa39ba23b12b9f7229d0ccf478583f60d5f6288506e931"
 
 NAMESPACE="${NAMESPACE:-sglang-nixl-recovery}"
 SGLANG_IMAGE="${SGLANG_IMAGE:-}"
@@ -337,10 +334,10 @@ write_summary() {
     echo "- Verdict reason: ${VERDICT_REASON}"
     echo "- Run: \`${RUN_ID}\`"
     echo "- Expected PR head: \`${EXPECTED_PR_SHA}\`"
-    echo "- Validation mode: pinned derived image plus verified PR source overlay"
+    echo "- Validation mode: single pinned image with embedded PR source"
     echo "- Base image: \`${SGLANG_IMAGE}\`"
     echo "- Expected base commit: \`${EXPECTED_BASE_COMMIT}\`"
-    echo "- PR overlay archive SHA-256: \`${PR_SOURCE_SHA256}\`"
+    echo "- PR source: embedded in the pinned image"
     echo "- Expected image ID: \`${EXPECTED_IMAGE_ID}\`"
     echo "- Expected base image digest: \`${EXPECTED_BASE_IMAGE_DIGEST}\`"
     echo "- Expected Mooncake build commit: \`${EXPECTED_MOONCAKE_COMMIT}\`"
@@ -395,10 +392,8 @@ collect_evidence() {
     echo "run_id=$RUN_ID"
     echo "namespace=$NAMESPACE"
     echo "image=$SGLANG_IMAGE"
-    echo "validation_mode=pinned-derived-image-plus-pr-source-overlay"
+    echo "validation_mode=single-pinned-image-with-embedded-pr-source"
     echo "expected_base_commit=$EXPECTED_BASE_COMMIT"
-    echo "pr_source_url=$PR_SOURCE_URL"
-    echo "pr_source_sha256=$PR_SOURCE_SHA256"
     echo "model=$MODEL"
     echo "model_revision=$MODEL_REVISION"
     echo "operation_id=$OPERATION_ID"
@@ -445,11 +440,6 @@ collect_evidence() {
       if ! kube logs -n "$NAMESPACE" "$pod" --timestamps \
         >"$EVIDENCE_DIR/${pod}.log" 2>&1; then
         warn "could not collect application log for $pod; see ${pod}.log"
-        evidence_rc=1
-      fi
-      if ! kube logs -n "$NAMESPACE" "$pod" -c pr-source-overlay --timestamps \
-        >"$EVIDENCE_DIR/${pod}.overlay-init.log" 2>&1; then
-        warn "could not collect overlay init log for $pod; see ${pod}.overlay-init.log"
         evidence_rc=1
       fi
       if ! kube logs -n "$NAMESPACE" "$pod" -c mooncake-torch-compatibility --timestamps \
@@ -758,26 +748,6 @@ $(yaml_optional_node_selector)
               app.kubernetes.io/instance: "${RUN_ID}"
           topologyKey: kubernetes.io/hostname
   initContainers:
-    - name: pr-source-overlay
-      image: "${SGLANG_IMAGE}"
-      imagePullPolicy: Always
-      command: ["/bin/bash", "-lc"]
-      args:
-        - |
-          set -Eeuo pipefail
-          archive=/tmp/sglang-pr-${PR_NUMBER}.tar.gz
-          echo "INFO: downloading PR source ${EXPECTED_PR_SHA}"
-          curl -fL --retry 3 --connect-timeout 15 --max-time 300 \\
-            -o "\$archive" "${PR_SOURCE_URL}"
-          echo "${PR_SOURCE_SHA256}  \$archive" | sha256sum -c -
-          mkdir -p /opt/pr-source
-          tar -xzf "\$archive" --strip-components=1 -C /opt/pr-source
-          printf '%s\\n' "${EXPECTED_PR_SHA}" >/opt/pr-source/.pr-head
-          test -f /opt/pr-source/python/sglang/srt/layers/moe/token_dispatcher/nixl.py
-          echo "SUCCESS: verified PR source overlay ${EXPECTED_PR_SHA}"
-      volumeMounts:
-        - name: pr-source
-          mountPath: /opt/pr-source
     - name: mooncake-torch-compatibility
       image: "${SGLANG_IMAGE}"
       imagePullPolicy: Always
@@ -841,7 +811,7 @@ $(yaml_optional_node_selector)
         - |
           set -euo pipefail
           test "\$(cat /opt/pr-source/.pr-head)" = "${EXPECTED_PR_SHA}"
-          python3 -c 'import pathlib,sglang; p=pathlib.Path(sglang.__file__).resolve(); assert str(p).startswith("/opt/pr-source/python/"), p; print("SUCCESS: PR overlay imported from", p)'
+          python3 -c 'import pathlib,sglang; p=pathlib.Path(sglang.__file__).resolve(); assert str(p).startswith("/opt/pr-source/python/"), p; print("SUCCESS: embedded PR source imported from", p)'
           sglang serve \\
             --model-path "${MODEL}" \\
             --revision "${MODEL_REVISION}" \\
@@ -897,14 +867,10 @@ $(yaml_optional_resources)
         capabilities:
           add: ["IPC_LOCK"]
       volumeMounts:
-        - name: pr-source
-          mountPath: /opt/pr-source
         - name: dshm
           mountPath: /dev/shm
 $(yaml_optional_cache_mount)
   volumes:
-    - name: pr-source
-      emptyDir: {}
     - name: dshm
       emptyDir:
         medium: Memory
@@ -1195,7 +1161,7 @@ check_cluster_capacity() {
 
 verify_runtime_provenance() {
   local pod="$1"
-  note "Verifying pinned base image and PR overlay provenance in $pod"
+  note "Verifying pinned base image and embedded PR provenance in $pod"
   kube_with_timeout "$COMMAND_TIMEOUT_SECONDS" exec -n "$NAMESPACE" "$pod" -- env \
     EXPECTED_BASE_COMMIT="$EXPECTED_BASE_COMMIT" \
     EXPECTED_PR_SHA="$EXPECTED_PR_SHA" \
@@ -1207,12 +1173,13 @@ import sglang
 base = os.environ.get("SGLANG_BUILD_COMMIT", "")
 expected_base = os.environ["EXPECTED_BASE_COMMIT"]
 assert base == expected_base, (base, expected_base)
-head = Path("/opt/pr-source/.pr-head").read_text().strip()
+head = os.environ.get("SGLANG_PR_COMMIT", "")
 assert head == os.environ["EXPECTED_PR_SHA"], head
+assert Path("/opt/pr-source/.pr-head").read_text().strip() == head
 module = Path(sglang.__file__).resolve()
 assert str(module).startswith("/opt/pr-source/python/"), module
 print(f"base_commit={base}")
-print(f"pr_overlay_commit={head}")
+print(f"embedded_pr_commit={head}")
 print(f"sglang_module={module}")
 ' | tee "$EVIDENCE_DIR/${pod}.provenance.txt"
 }
@@ -1399,7 +1366,7 @@ main() {
   require_command python3
   require_command tar
   debug "evidence_directory=$EVIDENCE_DIR"
-  debug "base_image=$SGLANG_IMAGE base_commit=$EXPECTED_BASE_COMMIT pr_archive_sha256=$PR_SOURCE_SHA256"
+  debug "image=$SGLANG_IMAGE base_commit=$EXPECTED_BASE_COMMIT embedded_pr=$EXPECTED_PR_SHA"
   [[ -n "$SGLANG_IMAGE" ]] || die "SGLANG_IMAGE resolved empty"
   [[ -n "$EXPECTED_IMAGE_ID" ]] || die "EXPECTED_IMAGE_ID resolved empty"
   [[ "$GPU_RESOURCE_COUNT" == "1" ]] || die "PR #42780 Milestone 1 requires one GPU/native rank per allocation"
@@ -1431,15 +1398,12 @@ main() {
     die "MODEL_REVISION must be exactly 40 hexadecimal characters"
   [[ "$EXPECTED_MOONCAKE_COMMIT" =~ ^[0-9a-fA-F]{40}$ ]] || \
     die "EXPECTED_MOONCAKE_COMMIT must be exactly 40 hexadecimal characters"
-  [[ "$PR_SOURCE_SHA256" =~ ^[0-9a-fA-F]{64}$ ]] || \
-    die "PR_SOURCE_SHA256 must be exactly 64 hexadecimal characters"
   local value_name
   for value_name in NAMESPACE SGLANG_IMAGE MODEL MODEL_REVISION GPU_RESOURCE_KEY RDMA_RESOURCE_KEY \
     UCX_NET_DEVICES UCX_TLS MOONCAKE_IB_DEVICE NODE_SELECTOR_KEY NODE_SELECTOR_VALUE \
     HF_TOKEN_SECRET_NAME HF_CACHE_PVC IMAGE_PULL_SECRET EXPECTED_IMAGE_ID \
     EXPECTED_BASE_IMAGE_DIGEST EXPECTED_MOONCAKE_COMMIT KUBECTL_REQUEST_TIMEOUT \
-    EVIDENCE_DIR PR_SOURCE_URL \
-    PR_SOURCE_SHA256 EXPECTED_NVIDIA_DRIVER_VERSION EXPECTED_TORCH_CUDA_VERSION \
+    EVIDENCE_DIR EXPECTED_NVIDIA_DRIVER_VERSION EXPECTED_TORCH_CUDA_VERSION \
     EXPECTED_NCCL_VERSION EXPECTED_UCX_VERSION EXPECTED_NIXL_VERSION; do
     validate_scalar "$value_name" "${!value_name}"
   done
@@ -1458,7 +1422,7 @@ main() {
   fi
   check_prerequisite_permissions
   check_cluster_capacity
-  warn "Validation mode overlays exact PR Python source on a pinned derived image based on $EXPECTED_BASE_COMMIT; this is not a wholly PR-built image"
+  note "Validation uses one digest-pinned image containing base $EXPECTED_BASE_COMMIT, Mooncake $EXPECTED_MOONCAKE_COMMIT, and PR $EXPECTED_PR_SHA"
   warn "Cost bound: at most two one-GPU Pods run concurrently; each has activeDeadlineSeconds=$POD_ACTIVE_DEADLINE_SECONDS"
   mark_stage setup complete
 
