@@ -30,8 +30,11 @@
 #
 # The derived image must set MOONCAKE_BUILD_COMMIT to the full source commit
 # used to build Mooncake and SGLANG_BASE_IMAGE_DIGEST to the official image
-# digest from which it was derived. It may retain EXPECTED_BASE_COMMIT when it
-# changes only Mooncake; always provide SGLANG_IMAGE and EXPECTED_IMAGE_ID.
+# digest from which it was derived. This is a self-attested compatibility
+# claim, not proof of OCI parent lineage. Retain the pinned Dockerfile, build
+# logs, and signed build provenance separately. It may retain
+# EXPECTED_BASE_COMMIT when it changes only Mooncake; always provide
+# SGLANG_IMAGE and EXPECTED_IMAGE_ID.
 #
 # Alternatively:
 #   chmod +x ./run_nixl_fixed_slot_recovery_k8s.sh
@@ -63,7 +66,7 @@
 #   STATUS_INTERVAL_SECONDS=30
 #   STUCK_THRESHOLD_SECONDS=120
 #   RECOVERY_TIMEOUT_SECONDS=900
-#   POD_ACTIVE_DEADLINE_SECONDS=3000
+#   POD_ACTIVE_DEADLINE_SECONDS=7200
 #   CLEANUP_TIMEOUT_SECONDS=180
 #   KEEP_RESOURCES=true                       # preserve pods after the run
 #
@@ -72,7 +75,7 @@
 set -Eeuo pipefail
 
 readonly PR_NUMBER="42780"
-readonly EXPECTED_PR_SHA="a73ca55f23bff0a3078da00f897d41e9b843f491"
+readonly EXPECTED_PR_SHA="78e609a455a6ea2e929b03f912c9de504cb11f4d"
 readonly APP="sglang-nixl-recovery"
 readonly OFFICIAL_BASE_IMAGE_DIGEST="sha256:e20a28a4badee7d3de71881e7c2c160c7079465bf1ac21edec31a99c2602507d"
 readonly EXPECTED_BASE_COMMIT="e6072935bfa1036d4e20e8ed042ce1ff09872f57"

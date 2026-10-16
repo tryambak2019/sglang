@@ -6,8 +6,8 @@ ARG SGLANG_BASE_IMAGE=lmsysorg/sglang@sha256:e20a28a4badee7d3de71881e7c2c160c707
 # update therefore invalidates only this small stage and the final image layer.
 FROM ${SGLANG_BASE_IMAGE} AS pr-source
 
-ARG SGLANG_PR_COMMIT=a73ca55f23bff0a3078da00f897d41e9b843f491
-ARG SGLANG_PR_ARCHIVE_SHA256=48581d1cd796dc353aaa39ba23b12b9f7229d0ccf478583f60d5f6288506e931
+ARG SGLANG_PR_COMMIT=78e609a455a6ea2e929b03f912c9de504cb11f4d
+ARG SGLANG_PR_ARCHIVE_SHA256=76dec0fff9ca89ffa2f123c672a3af32c7c2b73ce9bbffb5defd0d08f2ac782c
 
 USER root
 WORKDIR /opt/pr-source
@@ -29,15 +29,19 @@ FROM ${SGLANG_BASE_IMAGE} AS mooncake-builder
 ARG MOONCAKE_REPOSITORY=https://github.com/kvcache-ai/Mooncake.git
 ARG MOONCAKE_BUILD_COMMIT=1c54e233a22404692efd312739db749991d8d757
 ARG TORCH_CUDA_ARCH_LIST="8.0;9.0;10.0;10.3"
+ARG MOONCAKE_CUDA_ARCHITECTURES="80-real;90-real;100-real;103-real"
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
     TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST} \
+    CUDAARCHS=${MOONCAKE_CUDA_ARCHITECTURES} \
     MAX_JOBS=2 \
     PATH="/usr/local/go/bin:${PATH}"
 
 USER root
 WORKDIR /opt/mooncake-src
+
+COPY validation/mooncake-sm100.patch /tmp/mooncake-sm100.patch
 
 RUN set -eux; \
     command -v nvcc; \
@@ -46,6 +50,8 @@ RUN set -eux; \
     git fetch --depth=1 origin "${MOONCAKE_BUILD_COMMIT}"; \
     git checkout --detach "${MOONCAKE_BUILD_COMMIT}"; \
     test "$(git rev-parse HEAD)" = "${MOONCAKE_BUILD_COMMIT}"; \
+    git apply --check /tmp/mooncake-sm100.patch; \
+    git apply /tmp/mooncake-sm100.patch; \
     bash dependencies.sh -y
 
 RUN set -eux; \
@@ -59,6 +65,7 @@ RUN set -eux; \
       -DWITH_EP=ON \
       -DSTORE_USE_ETCD=ON \
       -DPython3_EXECUTABLE=/opt/sglang/bin/python \
+      -DCMAKE_CUDA_ARCHITECTURES="${MOONCAKE_CUDA_ARCHITECTURES}" \
       -DCMAKE_BUILD_TYPE=Release; \
     export LIBRARY_PATH="/usr/local/cuda/lib64/stubs:${LIBRARY_PATH:-}"; \
     cmake --build . --parallel 2; \
@@ -83,7 +90,8 @@ FROM ${SGLANG_BASE_IMAGE} AS runtime
 
 ARG MOONCAKE_BUILD_COMMIT=1c54e233a22404692efd312739db749991d8d757
 ARG SGLANG_BASE_IMAGE_DIGEST=sha256:e20a28a4badee7d3de71881e7c2c160c7079465bf1ac21edec31a99c2602507d
-ARG SGLANG_PR_COMMIT=a73ca55f23bff0a3078da00f897d41e9b843f491
+ARG SGLANG_PR_COMMIT=78e609a455a6ea2e929b03f912c9de504cb11f4d
+ARG MOONCAKE_CUDA_ARCHITECTURES="80-real;90-real;100-real;103-real"
 
 ENV MOONCAKE_BUILD_COMMIT=${MOONCAKE_BUILD_COMMIT} \
     SGLANG_BASE_IMAGE_DIGEST=${SGLANG_BASE_IMAGE_DIGEST} \
@@ -95,6 +103,7 @@ LABEL org.opencontainers.image.title="SGLang PR 42780 Mooncake validation depend
       org.opencontainers.image.base.digest=${SGLANG_BASE_IMAGE_DIGEST} \
       org.opencontainers.image.revision=${SGLANG_PR_COMMIT} \
       ai.mooncake.source.revision=${MOONCAKE_BUILD_COMMIT} \
+      ai.mooncake.cuda.architectures=${MOONCAKE_CUDA_ARCHITECTURES} \
       org.opencontainers.image.source="https://github.com/tryambak2019/sglang"
 
 USER root
@@ -111,4 +120,3 @@ RUN set -eux; \
     python -c 'import pathlib, sglang; p=pathlib.Path(sglang.__file__).resolve(); assert str(p).startswith("/opt/pr-source/python/"), p; print(p)'; \
     test -n "${MOONCAKE_BUILD_COMMIT}"; \
     test -n "${SGLANG_BASE_IMAGE_DIGEST}"
-
