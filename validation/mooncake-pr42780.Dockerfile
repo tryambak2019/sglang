@@ -7,7 +7,8 @@ ARG SGLANG_BASE_IMAGE=lmsysorg/sglang@sha256:e20a28a4badee7d3de71881e7c2c160c707
 FROM ${SGLANG_BASE_IMAGE} AS pr-source
 
 ARG SGLANG_PR_COMMIT=c796afa0089334126692bd2d114b2dade6b41b6a
-ARG SGLANG_PR_ARCHIVE_SHA256=76dec0fff9ca89ffa2f123c672a3af32c7c2b73ce9bbffb5defd0d08f2ac782c
+ARG SGLANG_PR_REPOSITORY=tryambak2019/sglang
+ARG SGLANG_PR_ARCHIVE_SHA256=affa72fb41f695d6fa786b962b63e45654a85e93c3494487819777e5f58feff8
 
 USER root
 WORKDIR /opt/pr-source
@@ -15,7 +16,7 @@ RUN set -eux; \
     archive=/tmp/sglang-pr.tar.gz; \
     curl -fL --retry 3 --connect-timeout 15 --max-time 300 \
       -o "${archive}" \
-      "https://github.com/sgl-project/sglang/archive/${SGLANG_PR_COMMIT}.tar.gz"; \
+      "https://github.com/${SGLANG_PR_REPOSITORY}/archive/${SGLANG_PR_COMMIT}.tar.gz"; \
     echo "${SGLANG_PR_ARCHIVE_SHA256}  ${archive}" | sha256sum -c -; \
     tar -xzf "${archive}" --strip-components=1 -C /opt/pr-source; \
     printf '%s\n' "${SGLANG_PR_COMMIT}" > /opt/pr-source/.pr-head; \
