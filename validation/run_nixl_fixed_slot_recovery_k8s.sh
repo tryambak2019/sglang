@@ -75,7 +75,7 @@
 set -Eeuo pipefail
 
 readonly PR_NUMBER="42780"
-readonly EXPECTED_PR_SHA="78e609a455a6ea2e929b03f912c9de504cb11f4d"
+readonly EXPECTED_PR_SHA="c796afa0089334126692bd2d114b2dade6b41b6a"
 readonly APP="sglang-nixl-recovery"
 readonly OFFICIAL_BASE_IMAGE_DIGEST="sha256:e20a28a4badee7d3de71881e7c2c160c7079465bf1ac21edec31a99c2602507d"
 readonly EXPECTED_BASE_COMMIT="e6072935bfa1036d4e20e8ed042ce1ff09872f57"
@@ -838,7 +838,8 @@ ${geometry_args}
             --elastic-ep-join-mode "${join_mode}" \\
 ${allocation_index_arg}${mooncake_device_arg}            --cuda-graph-backend-prefill disabled \\
             --cuda-graph-backend-decode full \\
-            --mem-fraction-static 0.7 &
+--cuda-graph-max-bs-decode 16 \\
+--mem-fraction-static 0.7 &
           sglang_pid=\$!
           printf '%s\\n' "\$sglang_pid" >/tmp/sglang.pid
           wait "\$sglang_pid"
@@ -847,6 +848,8 @@ ${allocation_index_arg}${mooncake_device_arg}            --cuda-graph-backend-pr
           value: "1"
         - name: PYTHONPATH
           value: "/opt/pr-source/python"
+        - name: SGLANG_NIXL_EP_BF16_DISPATCH
+          value: "1"
         - name: SGLANG_EXPECTED_PR_SHA
           value: "${EXPECTED_PR_SHA}"
         - name: NCCL_DEBUG
