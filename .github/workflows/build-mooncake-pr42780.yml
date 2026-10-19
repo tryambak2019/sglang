@@ -21,7 +21,7 @@ concurrency:
 
 env:
   IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/sglang-pr42780-recovery
-  IMAGE_TAG: pr42780-c796afa-mooncake-1c54e233-sm100
+  IMAGE_TAG: pr42780-6d99dbd-mooncake-1c54e233-sm100
 
 jobs:
   build:
@@ -103,7 +103,7 @@ jobs:
             echo
             echo "Build index digest: \`${INDEX_DIGEST}\`"
             echo "Mooncake commit: \`1c54e233a22404692efd312739db749991d8d757\`"
-            echo "PR commit: \`c796afa0089334126692bd2d114b2dade6b41b6a\`"
+            echo "PR commit: \`6d99dbd19ac302ee1b1cf42121454f83faa5d746\`"
             echo "Mooncake CUDA architectures: \`80-real;90-real;100-real;103-real\`"
             echo "SGLang base digest: \`sha256:e20a28a4badee7d3de71881e7c2c160c7079465bf1ac21edec31a99c2602507d\`"
           } >> "$GITHUB_STEP_SUMMARY"
