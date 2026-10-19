@@ -6,6 +6,7 @@ on:
       - validation/pr42780-mooncake-image
     paths:
       - validation/mooncake-pr42780.Dockerfile
+      - validation/mooncake-sm100.patch
       - .github/workflows/build-mooncake-pr42780.yml
   workflow_dispatch:
 

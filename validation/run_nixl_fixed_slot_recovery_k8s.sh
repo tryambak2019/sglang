@@ -814,8 +814,9 @@ $(yaml_optional_node_selector)
         - |
           set -euo pipefail
           test "\$(cat /opt/pr-source/.pr-head)" = "${EXPECTED_PR_SHA}"
+          test "\${SGLANG_RUST_BUILD_MODE}" = never
           python3 -c 'import pathlib,sglang; p=pathlib.Path(sglang.__file__).resolve(); assert str(p).startswith("/opt/pr-source/python/"), p; print("SUCCESS: embedded PR source imported from", p)'
-          SGLANG_RUST_BUILD_MODE=never python3 -c 'from pathlib import Path; from sglang.srt.mem_cache.rust_tree_core.extension import bindings; p = Path(bindings.__file__).resolve(); assert str(p).startswith("/opt/pr-source/python/"), p; print("SUCCESS: Rust TreeCore imported from", p)'
+          python3 -c 'from pathlib import Path; from sglang.srt.mem_cache.rust_tree_core.extension import bindings; p = Path(bindings.__file__).resolve(); assert str(p).startswith("/opt/pr-source/python/"), p; binding = bindings.RustUnifiedTreeCoreBinding; assert hasattr(binding, "adjust_component_size"), binding; assert hasattr(binding, "collect_path_info"), binding; print("SUCCESS: Rust TreeCore imported from", p)'
           sglang serve \\
             --model-path "${MODEL}" \\
             --revision "${MODEL_REVISION}" \\
@@ -850,6 +851,8 @@ ${allocation_index_arg}${mooncake_device_arg}            --cuda-graph-backend-pr
           value: "1"
         - name: PYTHONPATH
           value: "/opt/pr-source/python"
+        - name: SGLANG_RUST_BUILD_MODE
+          value: "never"
         - name: SGLANG_NIXL_EP_BF16_DISPATCH
           value: "1"
         - name: SGLANG_EXPECTED_PR_SHA

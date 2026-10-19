@@ -22,6 +22,35 @@ RUN set -eux; \
     printf '%s\n' "${SGLANG_PR_COMMIT}" > /opt/pr-source/.pr-head; \
     test -f python/sglang/srt/layers/moe/token_dispatcher/nixl.py
 
+# Build the TreeCore binding from the embedded PR checkout. The extension must
+# match the PR Python API, rather than the base image's possibly older ABI.
+FROM ${SGLANG_BASE_IMAGE} AS pr-rust-builder
+
+USER root
+COPY --from=pr-source /opt/pr-source/ /opt/pr-source/
+
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends build-essential ca-certificates curl pkg-config; \
+    rm -rf /var/lib/apt/lists/*; \
+    curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal; \
+    python -m pip install --no-cache-dir 'setuptools-rust>=1.11'; \
+    test -f /opt/pr-source/rust/Cargo.lock; \
+    test -f /opt/pr-source/rust/sglang-radix-tree/Cargo.lock
+
+RUN set -eux; \
+    export PATH="/root/.cargo/bin:${PATH}"; \
+    command -v cargo; \
+    cargo --version; \
+    cd /opt/pr-source/python; \
+    SGLANG_BUILD_RUST_EXTS=mem_cache python setup.py build_rust --inplace; \
+    extension_count="$(find sglang/srt/mem_cache/rust_tree_core -maxdepth 1 -type f -name 'mem_cache.*.so' | wc -l)"; \
+    test "${extension_count}" -eq 1; \
+    extension="$(find sglang/srt/mem_cache/rust_tree_core -maxdepth 1 -type f -name 'mem_cache.*.so' -print -quit)"; \
+    test -n "${extension}"; \
+    mkdir -p /opt/pr-rust-artifact; \
+    cp --preserve=mode,timestamps "${extension}" /opt/pr-rust-artifact/
+
 # Build against the exact SGLang runtime, not merely the same nominal
 # Torch/CUDA versions. This makes the compiled PG adapter ABI-specific to the
 # image that will run the recovery validation.
@@ -111,6 +140,7 @@ USER root
 COPY --from=mooncake-builder /opt/mooncake-src/mooncake-wheel/dist/ /tmp/mooncake-wheel/
 COPY --from=mooncake-builder /root/.cache/mooncake/pg_jit/ /root/.cache/mooncake/pg_jit/
 COPY --from=pr-source /opt/pr-source/ /opt/pr-source/
+COPY --from=pr-rust-builder /opt/pr-rust-artifact/ /opt/pr-source/python/sglang/srt/mem_cache/rust_tree_core/
 
 RUN set -eux; \
     python -m pip uninstall -y mooncake-transfer-engine mooncake-transfer-engine-cuda13 || true; \
@@ -122,31 +152,6 @@ RUN set -eux; \
     test -n "${MOONCAKE_BUILD_COMMIT}"; \
     test -n "${SGLANG_BASE_IMAGE_DIGEST}"
 
-RUN PYTHONPATH= python - <<'PY'
-import shutil
-from pathlib import Path
-
-import sglang
-
-source_dir = (
-    Path(sglang.__file__).resolve().parent
-    / "srt"
-    / "mem_cache"
-    / "rust_tree_core"
-)
-extensions = sorted(source_dir.glob("mem_cache.*.so"))
-if len(extensions) != 1:
-    raise SystemExit(
-        "expected exactly one bundled production Rust TreeCore extension "
-        f"under {source_dir}, found {extensions}"
-    )
-destination_dir = Path("/opt/pr-source/python/sglang/srt/mem_cache/rust_tree_core")
-destination_dir.mkdir(parents=True, exist_ok=True)
-destination = destination_dir / extensions[0].name
-shutil.copy2(extensions[0], destination)
-print(f"staged production Rust TreeCore extension at {destination}")
-PY
-
 RUN PYTHONPATH=/opt/pr-source/python SGLANG_RUST_BUILD_MODE=never python - <<'PY'
 from pathlib import Path
 
@@ -156,5 +161,9 @@ module_path = Path(bindings.__file__).resolve()
 expected_root = Path("/opt/pr-source/python").resolve()
 if expected_root not in module_path.parents:
     raise SystemExit(f"Rust TreeCore was not loaded from embedded PR source: {module_path}")
+binding = bindings.RustUnifiedTreeCoreBinding
+for method in ("adjust_component_size", "collect_path_info"):
+    if not hasattr(binding, method):
+        raise SystemExit(f"RustUnifiedTreeCoreBinding is missing {method}")
 print(f"loaded production Rust TreeCore from {module_path}")
 PY
