@@ -815,6 +815,7 @@ $(yaml_optional_node_selector)
           set -euo pipefail
           test "\$(cat /opt/pr-source/.pr-head)" = "${EXPECTED_PR_SHA}"
           python3 -c 'import pathlib,sglang; p=pathlib.Path(sglang.__file__).resolve(); assert str(p).startswith("/opt/pr-source/python/"), p; print("SUCCESS: embedded PR source imported from", p)'
+          SGLANG_RUST_BUILD_MODE=never python3 -c 'from pathlib import Path; from sglang.srt.mem_cache.rust_tree_core.extension import bindings; p = Path(bindings.__file__).resolve(); assert str(p).startswith("/opt/pr-source/python/"), p; print("SUCCESS: Rust TreeCore imported from", p)'
           sglang serve \\
             --model-path "${MODEL}" \\
             --revision "${MODEL_REVISION}" \\
@@ -827,6 +828,7 @@ ${geometry_args}
             --enable-dp-lm-head \\
             --elastic-ep-backend mooncake \\
             --moe-a2a-backend nixl \\
+            --moe-runner-backend deep_gemm \\
             --deepep-mode low_latency \\
             --moe-dense-tp-size 1 \\
             --disable-custom-all-reduce \\

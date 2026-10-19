@@ -121,3 +121,40 @@ RUN set -eux; \
     python -c 'import pathlib, sglang; p=pathlib.Path(sglang.__file__).resolve(); assert str(p).startswith("/opt/pr-source/python/"), p; print(p)'; \
     test -n "${MOONCAKE_BUILD_COMMIT}"; \
     test -n "${SGLANG_BASE_IMAGE_DIGEST}"
+
+RUN PYTHONPATH= python - <<'PY'
+import shutil
+from pathlib import Path
+
+import sglang
+
+source_dir = (
+    Path(sglang.__file__).resolve().parent
+    / "srt"
+    / "mem_cache"
+    / "rust_tree_core"
+)
+extensions = sorted(source_dir.glob("mem_cache.*.so"))
+if len(extensions) != 1:
+    raise SystemExit(
+        "expected exactly one bundled production Rust TreeCore extension "
+        f"under {source_dir}, found {extensions}"
+    )
+destination_dir = Path("/opt/pr-source/python/sglang/srt/mem_cache/rust_tree_core")
+destination_dir.mkdir(parents=True, exist_ok=True)
+destination = destination_dir / extensions[0].name
+shutil.copy2(extensions[0], destination)
+print(f"staged production Rust TreeCore extension at {destination}")
+PY
+
+RUN PYTHONPATH=/opt/pr-source/python SGLANG_RUST_BUILD_MODE=never python - <<'PY'
+from pathlib import Path
+
+from sglang.srt.mem_cache.rust_tree_core.extension import bindings
+
+module_path = Path(bindings.__file__).resolve()
+expected_root = Path("/opt/pr-source/python").resolve()
+if expected_root not in module_path.parents:
+    raise SystemExit(f"Rust TreeCore was not loaded from embedded PR source: {module_path}")
+print(f"loaded production Rust TreeCore from {module_path}")
+PY
