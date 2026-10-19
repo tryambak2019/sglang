@@ -104,6 +104,6 @@ jobs:
             echo "Build index digest: \`${INDEX_DIGEST}\`"
             echo "Mooncake commit: \`1c54e233a22404692efd312739db749991d8d757\`"
             echo "PR commit: \`beeea72594b1806f8a27aacaf3009f0bc4495209\`"
-            echo "Mooncake CUDA architectures: \`80-real;90-real;100-real;103-real\`"
+            echo "Mooncake CUDA architecture: \`100-real\`"
             echo "SGLang base digest: \`sha256:e20a28a4badee7d3de71881e7c2c160c7079465bf1ac21edec31a99c2602507d\`"
           } >> "$GITHUB_STEP_SUMMARY"

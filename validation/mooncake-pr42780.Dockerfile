@@ -61,13 +61,10 @@ FROM ${SGLANG_BASE_IMAGE} AS mooncake-builder
 
 ARG MOONCAKE_REPOSITORY=https://github.com/kvcache-ai/Mooncake.git
 ARG MOONCAKE_BUILD_COMMIT=1c54e233a22404692efd312739db749991d8d757
-ARG TORCH_CUDA_ARCH_LIST="8.0;9.0;10.0;10.3"
-ARG MOONCAKE_CUDA_ARCHITECTURES="80-real;90-real;100-real;103-real"
+ARG CUDA_ARCHITECTURE=100
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
-    TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST} \
-    CUDAARCHS=${MOONCAKE_CUDA_ARCHITECTURES} \
     MAX_JOBS=2 \
     PATH="/usr/local/go/bin:${PATH}"
 
@@ -77,6 +74,9 @@ WORKDIR /opt/mooncake-src
 COPY validation/mooncake-sm100.patch /tmp/mooncake-sm100.patch
 
 RUN set -eux; \
+    cuda_arch_major="${CUDA_ARCHITECTURE%?}"; \
+    export TORCH_CUDA_ARCH_LIST="${cuda_arch_major}.${CUDA_ARCHITECTURE#${cuda_arch_major}}"; \
+    export CUDAARCHS="${CUDA_ARCHITECTURE}-real"; \
     command -v nvcc; \
     python -c 'import torch; assert torch.__version__.split("+")[0] == "2.14.1", torch.__version__; print(torch.__version__, torch.version.cuda)'; \
     git clone --filter=blob:none --no-checkout "${MOONCAKE_REPOSITORY}" .; \
@@ -88,6 +88,9 @@ RUN set -eux; \
     bash dependencies.sh -y
 
 RUN set -eux; \
+    cuda_arch_major="${CUDA_ARCHITECTURE%?}"; \
+    export TORCH_CUDA_ARCH_LIST="${cuda_arch_major}.${CUDA_ARCHITECTURE#${cuda_arch_major}}"; \
+    export CUDAARCHS="${CUDA_ARCHITECTURE}-real"; \
     mkdir -p build; \
     cd build; \
     cmake -G Ninja .. \
@@ -98,7 +101,7 @@ RUN set -eux; \
       -DWITH_EP=ON \
       -DSTORE_USE_ETCD=ON \
       -DPython3_EXECUTABLE=/opt/sglang/bin/python \
-      -DCMAKE_CUDA_ARCHITECTURES="${MOONCAKE_CUDA_ARCHITECTURES}" \
+      -DCMAKE_CUDA_ARCHITECTURES="${CUDAARCHS}" \
       -DCMAKE_BUILD_TYPE=Release; \
     export LIBRARY_PATH="/usr/local/cuda/lib64/stubs:${LIBRARY_PATH:-}"; \
     cmake --build . --parallel 2; \
@@ -124,7 +127,7 @@ FROM ${SGLANG_BASE_IMAGE} AS runtime
 ARG MOONCAKE_BUILD_COMMIT=1c54e233a22404692efd312739db749991d8d757
 ARG SGLANG_BASE_IMAGE_DIGEST=sha256:e20a28a4badee7d3de71881e7c2c160c7079465bf1ac21edec31a99c2602507d
 ARG SGLANG_PR_COMMIT=beeea72594b1806f8a27aacaf3009f0bc4495209
-ARG MOONCAKE_CUDA_ARCHITECTURES="80-real;90-real;100-real;103-real"
+ARG CUDA_ARCHITECTURE=100
 
 ENV MOONCAKE_BUILD_COMMIT=${MOONCAKE_BUILD_COMMIT} \
     SGLANG_BASE_IMAGE_DIGEST=${SGLANG_BASE_IMAGE_DIGEST} \
@@ -136,7 +139,7 @@ LABEL org.opencontainers.image.title="SGLang PR 42780 Mooncake validation depend
       org.opencontainers.image.base.digest=${SGLANG_BASE_IMAGE_DIGEST} \
       org.opencontainers.image.revision=${SGLANG_PR_COMMIT} \
       ai.mooncake.source.revision=${MOONCAKE_BUILD_COMMIT} \
-      ai.mooncake.cuda.architectures=${MOONCAKE_CUDA_ARCHITECTURES} \
+      ai.mooncake.cuda.architecture=${CUDA_ARCHITECTURE} \
       org.opencontainers.image.source="https://github.com/tryambak2019/sglang"
 
 USER root
