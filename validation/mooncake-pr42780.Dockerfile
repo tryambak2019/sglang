@@ -31,10 +31,13 @@ COPY --from=pr-source /opt/pr-source/ /opt/pr-source/
 
 RUN set -eux; \
     apt-get update; \
-    apt-get install -y --no-install-recommends build-essential ca-certificates curl pkg-config; \
+    apt-get install -y --no-install-recommends build-essential ca-certificates pkg-config; \
     rm -rf /var/lib/apt/lists/*; \
-    curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal; \
     python -m pip install --no-cache-dir 'setuptools-rust>=1.11'; \
+    export PATH="/root/.cargo/bin:${PATH}"; \
+    command -v cargo; \
+    cargo --version; \
+    rustc --version; \
     test -f /opt/pr-source/rust/Cargo.lock; \
     test -f /opt/pr-source/rust/sglang-radix-tree/Cargo.lock
 
