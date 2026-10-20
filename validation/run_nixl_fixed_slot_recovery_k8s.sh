@@ -75,7 +75,7 @@
 set -Eeuo pipefail
 
 readonly PR_NUMBER="42780"
-readonly EXPECTED_PR_SHA="beeea72594b1806f8a27aacaf3009f0bc4495209"
+readonly EXPECTED_PR_SHA="cfd38585be3038af8f30d49a9fe58beaf911a11d"
 readonly APP="sglang-nixl-recovery"
 readonly OFFICIAL_BASE_IMAGE_DIGEST="sha256:e20a28a4badee7d3de71881e7c2c160c7079465bf1ac21edec31a99c2602507d"
 readonly EXPECTED_BASE_COMMIT="e6072935bfa1036d4e20e8ed042ce1ff09872f57"
@@ -837,6 +837,7 @@ ${geometry_args}
             --ep-num-redundant-experts 2 \\
             --elastic-ep-initial-size 2 \\
             --max-ep-size 3 \\
+            --elastic-ep-recovery-policy fixed_slot \\
             --elastic-ep-allocation-id "${allocation_id}" \\
             --elastic-ep-join-mode "${join_mode}" \\
 ${allocation_index_arg}${mooncake_device_arg}            --cuda-graph-backend-prefill disabled \\
@@ -1359,6 +1360,29 @@ wait_for_recovery_ready() {
   die "recovery did not reach ready within ${RECOVERY_TIMEOUT_SECONDS}s"
 }
 
+wait_for_recovery_observation() {
+  local runtime_instance_id="$1"
+  local deadline=$((SECONDS + RECOVERY_TIMEOUT_SECONDS)) state phase
+  while (( SECONDS < deadline )); do
+    state="$(get_state || true)"
+    if [[ -n "$state" ]]; then
+      printf '%s\n' "$state" >"$EVIDENCE_DIR/recovery-state-awaiting.json"
+      phase="$(printf '%s' "$state" | jq -r '.recovery_phase // "unknown"')"
+      if [[ "$phase" == "awaiting_recovery" ]]; then
+        printf '%s' "$state" | jq -e \
+          --arg instance "$runtime_instance_id" \
+          '.instance_id == $instance and
+           .recovery_topology_generation == 0 and
+           .recovery_rank_offset == 1' >/dev/null
+        return 0
+      fi
+      [[ "$phase" != "failed" ]] || die "membership observation failed before recovery authorization: $state"
+    fi
+    sleep 2
+  done
+  die "membership observation did not reach awaiting_recovery within ${RECOVERY_TIMEOUT_SECONDS}s"
+}
+
 main() {
   if ! mkdir -p "$EVIDENCE_DIR"; then
     printf 'FAILURE: cannot create evidence directory: %s\n' "$EVIDENCE_DIR" >&2
@@ -1504,8 +1528,18 @@ EOF
   kill_and_confirm_failed_allocation "$FAILED_POD"
   mark_stage failed-allocation deleted
 
-  note "Driving one forward pass so NIXL detects and masks failed rank 1"
-  generate survivor-after-failure
+  [[ -n "$FAILED_POD_UID" ]] || die "failed allocation incarnation is missing"
+  note "Publishing correlated failed-membership observation for incarnation $FAILED_POD_UID"
+  curl -fsS --max-time 60 \
+    -H 'Content-Type: application/json' \
+    -d "$(jq -nc \
+      --arg instance "$runtime_instance_id" \
+      --arg incarnation "$FAILED_POD_UID" \
+      '{runtime_instance_id:$instance,topology_generation:0,rank:1,
+        failed_allocation_incarnation:$incarnation,membership_epoch:1}')" \
+    "http://127.0.0.1:${LOCAL_PORT}/observe_elastic_ep_membership" \
+    | tee "$EVIDENCE_DIR/membership-observation.json" | jq -e '.observation_key' >/dev/null
+  wait_for_recovery_observation "$runtime_instance_id"
 
   note "Authorizing fixed-slot recovery operation $OPERATION_ID"
   curl -fsS --max-time 60 \
@@ -1513,7 +1547,9 @@ EOF
     -d "$(jq -nc \
       --arg op "$OPERATION_ID" \
       --arg alloc "$REPLACEMENT_ALLOCATION_ID" \
-      '{operation_id:$op,topology_generation:0,allocation_id:$alloc,rank_offset:1}')" \
+      --arg incarnation "$FAILED_POD_UID" \
+      '{operation_id:$op,topology_generation:0,allocation_id:$alloc,rank_offset:1,
+        failed_allocation_incarnation:$incarnation}')" \
     "http://127.0.0.1:${LOCAL_PORT}/recover_elastic_ep" \
     | tee "$EVIDENCE_DIR/recovery-submit.json" | jq -e \
       --arg op "$OPERATION_ID" '.operation_id == $op and .recovery_phase == "restoring"' >/dev/null
