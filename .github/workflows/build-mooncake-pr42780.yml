@@ -22,7 +22,7 @@ concurrency:
 
 env:
   IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/sglang-pr42780-recovery
-  IMAGE_TAG: pr42780-162593a-mooncake-1c54e233-sm100
+  IMAGE_TAG: pr42780-6c40dbf-mooncake-1c54e233-sm100
 
 jobs:
   build:
@@ -61,6 +61,7 @@ jobs:
         with:
           context: .
           file: validation/mooncake-pr42780.Dockerfile
+          target: runtime-reuse-mooncake
           platforms: linux/amd64
           push: true
           tags: |
@@ -68,10 +69,14 @@ jobs:
             ${{ env.IMAGE_NAME }}:${{ github.sha }}
           provenance: mode=max
           sbom: true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=pr42780-rust-treecore-v1
+          cache-to: type=gha,mode=max,scope=pr42780-rust-treecore-v1
           build-args: |
-            NATIVE_ARTIFACT_SOURCE_COMMIT=162593a1ba5c6b8227cc3f0678489069f7b65c3b
+            REUSED_MOONCAKE_IMAGE=ghcr.io/tryambak2019/sglang-pr42780-recovery@sha256:61125246daa7194fa993b631a5012d61d7c4c79befc85f1e4e2311b57ff236a3
+            REUSED_MOONCAKE_IMAGE_DIGEST=sha256:61125246daa7194fa993b631a5012d61d7c4c79befc85f1e4e2311b57ff236a3
+            SGLANG_PR_COMMIT=6c40dbfec2103245abbab0721265efa747ed72c5
+            SGLANG_PR_ARCHIVE_SHA256=776568d15fc61182921d1c0934f1059a1f4ba272e8a2d32572e80d251e88d2e2
+            NATIVE_ARTIFACT_SOURCE_COMMIT=6c40dbfec2103245abbab0721265efa747ed72c5
 
       - name: Resolve the runnable amd64 manifest digest
         id: digest
@@ -105,9 +110,10 @@ jobs:
             echo '```'
             echo
             echo "Build index digest: \`${INDEX_DIGEST}\`"
+            echo "Reused Mooncake dependency: \`ghcr.io/tryambak2019/sglang-pr42780-recovery@sha256:61125246daa7194fa993b631a5012d61d7c4c79befc85f1e4e2311b57ff236a3\`"
             echo "Mooncake commit: \`1c54e233a22404692efd312739db749991d8d757\`"
-            echo "PR commit: \`162593a1ba5c6b8227cc3f0678489069f7b65c3b\`"
-            echo "TreeCore producing commit: \`162593a1ba5c6b8227cc3f0678489069f7b65c3b\`"
+            echo "PR commit: \`6c40dbfec2103245abbab0721265efa747ed72c5\`"
+            echo "TreeCore producing commit: \`6c40dbfec2103245abbab0721265efa747ed72c5\`"
             echo "Mooncake CUDA architecture: \`100-real\`"
             echo "SGLang base digest: \`sha256:e20a28a4badee7d3de71881e7c2c160c7079465bf1ac21edec31a99c2602507d\`"
           } >> "$GITHUB_STEP_SUMMARY"

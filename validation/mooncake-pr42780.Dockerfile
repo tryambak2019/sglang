@@ -1,14 +1,18 @@
 # syntax=docker/dockerfile:1.7
+# check=skip=InvalidBaseImagePlatform
+
+# This validation image is intentionally Linux/AMD64-only for B200 runners.
 
 ARG SGLANG_BASE_IMAGE=lmsysorg/sglang@sha256:e20a28a4badee7d3de71881e7c2c160c7079465bf1ac21edec31a99c2602507d
+ARG REUSED_MOONCAKE_IMAGE=ghcr.io/tryambak2019/sglang-pr42780-recovery@sha256:61125246daa7194fa993b631a5012d61d7c4c79befc85f1e4e2311b57ff236a3
 
 # Keep PR acquisition independent of the expensive Mooncake compilation. A PR
 # update therefore invalidates only this small stage and the final image layer.
 FROM ${SGLANG_BASE_IMAGE} AS pr-source
 
-ARG SGLANG_PR_COMMIT=162593a1ba5c6b8227cc3f0678489069f7b65c3b
+ARG SGLANG_PR_COMMIT=6c40dbfec2103245abbab0721265efa747ed72c5
 ARG SGLANG_PR_REPOSITORY=tryambak2019/sglang
-ARG SGLANG_PR_ARCHIVE_SHA256=b2308c0bccb8b346aa689673ca936b6b4dff106dd0b6f7f73f5e4d25a55aff0a
+ARG SGLANG_PR_ARCHIVE_SHA256=776568d15fc61182921d1c0934f1059a1f4ba272e8a2d32572e80d251e88d2e2
 
 USER root
 WORKDIR /opt/pr-source
@@ -41,7 +45,7 @@ RUN set -eux; \
 # COPY sources, so unrelated PR Python changes retain this stage's cache.
 FROM pr-rust-toolchain AS pr-rust-builder
 
-ARG NATIVE_ARTIFACT_SOURCE_COMMIT=162593a1ba5c6b8227cc3f0678489069f7b65c3b
+ARG NATIVE_ARTIFACT_SOURCE_COMMIT=6c40dbfec2103245abbab0721265efa747ed72c5
 
 USER root
 COPY validation/pr42780-native-inputs.txt /opt/pr42780-native-inputs.txt
@@ -157,12 +161,12 @@ RUN set -eux; \
 # Preserve the official SGLang image byte-for-byte except for replacing the
 # Mooncake Python distribution, copying its matching PG cache, and recording
 # immutable provenance metadata.
-FROM ${SGLANG_BASE_IMAGE} AS runtime
+FROM ${SGLANG_BASE_IMAGE} AS runtime-rebuild-mooncake
 
 ARG MOONCAKE_BUILD_COMMIT=1c54e233a22404692efd312739db749991d8d757
 ARG SGLANG_BASE_IMAGE_DIGEST=sha256:e20a28a4badee7d3de71881e7c2c160c7079465bf1ac21edec31a99c2602507d
-ARG SGLANG_PR_COMMIT=162593a1ba5c6b8227cc3f0678489069f7b65c3b
-ARG NATIVE_ARTIFACT_SOURCE_COMMIT=162593a1ba5c6b8227cc3f0678489069f7b65c3b
+ARG SGLANG_PR_COMMIT=6c40dbfec2103245abbab0721265efa747ed72c5
+ARG NATIVE_ARTIFACT_SOURCE_COMMIT=6c40dbfec2103245abbab0721265efa747ed72c5
 ARG CUDA_ARCHITECTURE=100
 
 ENV MOONCAKE_BUILD_COMMIT=${MOONCAKE_BUILD_COMMIT} \
@@ -196,6 +200,68 @@ RUN set -eux; \
     python -c 'import pathlib, sglang; p=pathlib.Path(sglang.__file__).resolve(); assert str(p).startswith("/opt/pr-source/python/"), p; print(p)'; \
     test -n "${MOONCAKE_BUILD_COMMIT}"; \
     test -n "${SGLANG_BASE_IMAGE_DIGEST}"
+
+RUN PYTHONPATH=/opt/pr-source/python SGLANG_RUST_BUILD_MODE=never python - <<'PY'
+from pathlib import Path
+
+from sglang.srt.mem_cache.rust_tree_core.extension import bindings
+
+module_path = Path(bindings.__file__).resolve()
+expected_root = Path("/opt/pr-source/python").resolve()
+if expected_root not in module_path.parents:
+    raise SystemExit(f"Rust TreeCore was not loaded from embedded PR source: {module_path}")
+binding = bindings.RustUnifiedTreeCoreBinding
+for method in ("adjust_component_size", "collect_path_info"):
+    if not hasattr(binding, method):
+        raise SystemExit(f"RustUnifiedTreeCoreBinding is missing {method}")
+print(f"loaded production Rust TreeCore from {module_path}")
+PY
+
+# Reuse the previously published immutable Mooncake runtime when the recorded
+# four-way classification proves that every Mooncake input is unchanged. This
+# target deliberately has no dependency edge to mooncake-builder, so BuildKit
+# neither downloads nor re-exports that large build graph through the GHA cache.
+FROM ${REUSED_MOONCAKE_IMAGE} AS runtime-reuse-mooncake
+
+ARG REUSED_MOONCAKE_IMAGE=ghcr.io/tryambak2019/sglang-pr42780-recovery@sha256:61125246daa7194fa993b631a5012d61d7c4c79befc85f1e4e2311b57ff236a3
+ARG REUSED_MOONCAKE_IMAGE_DIGEST=sha256:61125246daa7194fa993b631a5012d61d7c4c79befc85f1e4e2311b57ff236a3
+ARG MOONCAKE_BUILD_COMMIT=1c54e233a22404692efd312739db749991d8d757
+ARG SGLANG_BASE_IMAGE_DIGEST=sha256:e20a28a4badee7d3de71881e7c2c160c7079465bf1ac21edec31a99c2602507d
+ARG SGLANG_PR_COMMIT=6c40dbfec2103245abbab0721265efa747ed72c5
+ARG NATIVE_ARTIFACT_SOURCE_COMMIT=6c40dbfec2103245abbab0721265efa747ed72c5
+ARG CUDA_ARCHITECTURE=100
+
+ENV MOONCAKE_BUILD_COMMIT=${MOONCAKE_BUILD_COMMIT} \
+    SGLANG_BASE_IMAGE_DIGEST=${SGLANG_BASE_IMAGE_DIGEST} \
+    SGLANG_PR_COMMIT=${SGLANG_PR_COMMIT} \
+    SGLANG_NATIVE_ARTIFACT_SOURCE_COMMIT=${NATIVE_ARTIFACT_SOURCE_COMMIT} \
+    SGLANG_REUSED_MOONCAKE_IMAGE_DIGEST=${REUSED_MOONCAKE_IMAGE_DIGEST} \
+    PYTHONPATH=/opt/pr-source/python
+
+LABEL org.opencontainers.image.title="SGLang PR 42780 Mooncake validation dependency" \
+      org.opencontainers.image.description="Pinned Mooncake dependency image overlaid with PR 42780 source for fixed-slot recovery validation" \
+      org.opencontainers.image.base.digest=${SGLANG_BASE_IMAGE_DIGEST} \
+      org.opencontainers.image.revision=${SGLANG_PR_COMMIT} \
+      ai.mooncake.source.revision=${MOONCAKE_BUILD_COMMIT} \
+      ai.mooncake.dependency.image=${REUSED_MOONCAKE_IMAGE} \
+      ai.mooncake.dependency.digest=${REUSED_MOONCAKE_IMAGE_DIGEST} \
+      ai.sglang.native-artifact.source.revision=${NATIVE_ARTIFACT_SOURCE_COMMIT} \
+      ai.mooncake.cuda.architecture=${CUDA_ARCHITECTURE} \
+      org.opencontainers.image.source="https://github.com/tryambak2019/sglang"
+
+USER root
+RUN rm -rf /opt/pr-source
+COPY --from=pr-source /opt/pr-source/ /opt/pr-source/
+COPY --from=pr-rust-builder /opt/pr-rust-artifact/ /opt/pr-source/python/sglang/srt/mem_cache/rust_tree_core/
+
+RUN set -eux; \
+    test "$(cat /opt/pr-source/.pr-head)" = "${SGLANG_PR_COMMIT}"; \
+    test "${REUSED_MOONCAKE_IMAGE}" = "ghcr.io/tryambak2019/sglang-pr42780-recovery@${REUSED_MOONCAKE_IMAGE_DIGEST}"; \
+    test "${MOONCAKE_BUILD_COMMIT}" = "1c54e233a22404692efd312739db749991d8d757"; \
+    python -c 'import torch; assert torch.__version__.split("+")[0] == "2.14.1", torch.__version__'; \
+    python -m mooncake.pg --report; \
+    cat /opt/pr-source/python/sglang/srt/mem_cache/rust_tree_core/build-metadata.env; \
+    python -c 'import pathlib, sglang; p=pathlib.Path(sglang.__file__).resolve(); assert str(p).startswith("/opt/pr-source/python/"), p; print(p)'
 
 RUN PYTHONPATH=/opt/pr-source/python SGLANG_RUST_BUILD_MODE=never python - <<'PY'
 from pathlib import Path
