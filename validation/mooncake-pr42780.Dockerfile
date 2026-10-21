@@ -6,9 +6,9 @@ ARG SGLANG_BASE_IMAGE=lmsysorg/sglang@sha256:e20a28a4badee7d3de71881e7c2c160c707
 # update therefore invalidates only this small stage and the final image layer.
 FROM ${SGLANG_BASE_IMAGE} AS pr-source
 
-ARG SGLANG_PR_COMMIT=2b035c7502102dc89c962c75417262809f2cf126
+ARG SGLANG_PR_COMMIT=162593a1ba5c6b8227cc3f0678489069f7b65c3b
 ARG SGLANG_PR_REPOSITORY=tryambak2019/sglang
-ARG SGLANG_PR_ARCHIVE_SHA256=8381522b6652191f8d7316a2abac047904cc91bf9d882dfa96b8dbe8a4c13317
+ARG SGLANG_PR_ARCHIVE_SHA256=b2308c0bccb8b346aa689673ca936b6b4dff106dd0b6f7f73f5e4d25a55aff0a
 
 USER root
 WORKDIR /opt/pr-source
@@ -22,13 +22,11 @@ RUN set -eux; \
     printf '%s\n' "${SGLANG_PR_COMMIT}" > /opt/pr-source/.pr-head; \
     test -f python/sglang/srt/layers/moe/token_dispatcher/nixl.py
 
-# Build the TreeCore binding from the embedded PR checkout. The extension must
-# match the PR Python API, rather than the base image's possibly older ABI.
-FROM ${SGLANG_BASE_IMAGE} AS pr-rust-builder
+# Keep toolchain installation independent from both PR source and the declared
+# native inputs so a source-only change does not repeat apt/pip setup.
+FROM ${SGLANG_BASE_IMAGE} AS pr-rust-toolchain
 
 USER root
-COPY --from=pr-source /opt/pr-source/ /opt/pr-source/
-
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends build-essential ca-certificates pkg-config; \
@@ -37,14 +35,47 @@ RUN set -eux; \
     export PATH="/root/.cargo/bin:${PATH}"; \
     command -v cargo; \
     cargo --version; \
-    rustc --version; \
-    test -f /opt/pr-source/rust/Cargo.lock; \
-    test -f /opt/pr-source/rust/sglang-radix-tree/Cargo.lock
+    rustc --version
+
+# Build TreeCore from only its declared inputs. BuildKit hashes the selected
+# COPY sources, so unrelated PR Python changes retain this stage's cache.
+FROM pr-rust-toolchain AS pr-rust-builder
+
+ARG NATIVE_ARTIFACT_SOURCE_COMMIT=162593a1ba5c6b8227cc3f0678489069f7b65c3b
+
+USER root
+COPY validation/pr42780-native-inputs.txt /opt/pr42780-native-inputs.txt
+COPY --from=pr-source /opt/pr-source/python/setup.py /opt/pr-source/python/setup.py
+COPY --from=pr-source /opt/pr-source/python/pyproject.toml /opt/pr-source/python/pyproject.toml
+COPY --from=pr-source /opt/pr-source/python/sglang/srt/rust_extensions/torch_build.py /opt/pr-source/python/sglang/srt/rust_extensions/torch_build.py
+COPY --from=pr-source /opt/pr-source/rust/sglang-radix-tree/Cargo.toml /opt/pr-source/rust/sglang-radix-tree/Cargo.toml
+COPY --from=pr-source /opt/pr-source/rust/sglang-radix-tree/Cargo.lock /opt/pr-source/rust/sglang-radix-tree/Cargo.lock
+COPY --from=pr-source /opt/pr-source/rust/sglang-radix-tree/torch_compat.h /opt/pr-source/rust/sglang-radix-tree/torch_compat.h
+COPY --from=pr-source /opt/pr-source/rust/sglang-radix-tree/src/*.rs /opt/pr-source/rust/sglang-radix-tree/src/
+COPY --from=pr-source /opt/pr-source/rust/sglang-radix-tree/src/components/ /opt/pr-source/rust/sglang-radix-tree/src/components/
 
 RUN set -eux; \
     export PATH="/root/.cargo/bin:${PATH}"; \
     command -v cargo; \
     cargo --version; \
+    native_inputs_sha256="$(find \
+      /opt/pr42780-native-inputs.txt \
+      /opt/pr-source/python/setup.py \
+      /opt/pr-source/python/pyproject.toml \
+      /opt/pr-source/python/sglang/srt/rust_extensions/torch_build.py \
+      /opt/pr-source/rust/sglang-radix-tree/Cargo.toml \
+      /opt/pr-source/rust/sglang-radix-tree/Cargo.lock \
+      /opt/pr-source/rust/sglang-radix-tree/torch_compat.h \
+      /opt/pr-source/rust/sglang-radix-tree/src \
+      -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)"; \
+    mkdir -p /opt/pr-source/python/sglang/srt/mem_cache/rust_tree_core; \
+    printf '%s\n' \
+      '[workspace]' \
+      'resolver = "3"' \
+      'members = []' \
+      '[workspace.metadata.sglang]' \
+      'extension-manifests = ["sglang-radix-tree/Cargo.toml"]' \
+      > /opt/pr-source/rust/Cargo.toml; \
     cd /opt/pr-source/python; \
     SGLANG_BUILD_RUST_EXTS=mem_cache python setup.py build_rust --inplace; \
     extension_count="$(find sglang/srt/mem_cache/rust_tree_core -maxdepth 1 -type f -name 'mem_cache.*.so' | wc -l)"; \
@@ -52,7 +83,11 @@ RUN set -eux; \
     extension="$(find sglang/srt/mem_cache/rust_tree_core -maxdepth 1 -type f -name 'mem_cache.*.so' -print -quit)"; \
     test -n "${extension}"; \
     mkdir -p /opt/pr-rust-artifact; \
-    cp --preserve=mode,timestamps "${extension}" /opt/pr-rust-artifact/
+    cp --preserve=mode,timestamps "${extension}" /opt/pr-rust-artifact/; \
+    artifact_sha256="$(sha256sum "${extension}" | cut -d' ' -f1)"; \
+    printf 'source_revision=%s\nartifact_sha256=%s\nnative_inputs_sha256=%s\n' \
+      "${NATIVE_ARTIFACT_SOURCE_COMMIT}" "${artifact_sha256}" "${native_inputs_sha256}" \
+      > /opt/pr-rust-artifact/build-metadata.env
 
 # Build against the exact SGLang runtime, not merely the same nominal
 # Torch/CUDA versions. This makes the compiled PG adapter ABI-specific to the
@@ -126,12 +161,14 @@ FROM ${SGLANG_BASE_IMAGE} AS runtime
 
 ARG MOONCAKE_BUILD_COMMIT=1c54e233a22404692efd312739db749991d8d757
 ARG SGLANG_BASE_IMAGE_DIGEST=sha256:e20a28a4badee7d3de71881e7c2c160c7079465bf1ac21edec31a99c2602507d
-ARG SGLANG_PR_COMMIT=2b035c7502102dc89c962c75417262809f2cf126
+ARG SGLANG_PR_COMMIT=162593a1ba5c6b8227cc3f0678489069f7b65c3b
+ARG NATIVE_ARTIFACT_SOURCE_COMMIT=162593a1ba5c6b8227cc3f0678489069f7b65c3b
 ARG CUDA_ARCHITECTURE=100
 
 ENV MOONCAKE_BUILD_COMMIT=${MOONCAKE_BUILD_COMMIT} \
     SGLANG_BASE_IMAGE_DIGEST=${SGLANG_BASE_IMAGE_DIGEST} \
     SGLANG_PR_COMMIT=${SGLANG_PR_COMMIT} \
+    SGLANG_NATIVE_ARTIFACT_SOURCE_COMMIT=${NATIVE_ARTIFACT_SOURCE_COMMIT} \
     PYTHONPATH=/opt/pr-source/python
 
 LABEL org.opencontainers.image.title="SGLang PR 42780 Mooncake validation dependency" \
@@ -139,6 +176,7 @@ LABEL org.opencontainers.image.title="SGLang PR 42780 Mooncake validation depend
       org.opencontainers.image.base.digest=${SGLANG_BASE_IMAGE_DIGEST} \
       org.opencontainers.image.revision=${SGLANG_PR_COMMIT} \
       ai.mooncake.source.revision=${MOONCAKE_BUILD_COMMIT} \
+      ai.sglang.native-artifact.source.revision=${NATIVE_ARTIFACT_SOURCE_COMMIT} \
       ai.mooncake.cuda.architecture=${CUDA_ARCHITECTURE} \
       org.opencontainers.image.source="https://github.com/tryambak2019/sglang"
 
@@ -154,6 +192,7 @@ RUN set -eux; \
     python -c 'import torch; assert torch.__version__.split("+")[0] == "2.14.1", torch.__version__'; \
     python -m mooncake.pg --report; \
     test "$(cat /opt/pr-source/.pr-head)" = "${SGLANG_PR_COMMIT}"; \
+    cat /opt/pr-source/python/sglang/srt/mem_cache/rust_tree_core/build-metadata.env; \
     python -c 'import pathlib, sglang; p=pathlib.Path(sglang.__file__).resolve(); assert str(p).startswith("/opt/pr-source/python/"), p; print(p)'; \
     test -n "${MOONCAKE_BUILD_COMMIT}"; \
     test -n "${SGLANG_BASE_IMAGE_DIGEST}"

@@ -75,7 +75,7 @@
 set -Eeuo pipefail
 
 readonly PR_NUMBER="42780"
-readonly EXPECTED_PR_SHA="2b035c7502102dc89c962c75417262809f2cf126"
+readonly EXPECTED_PR_SHA="162593a1ba5c6b8227cc3f0678489069f7b65c3b"
 readonly APP="sglang-nixl-recovery"
 readonly OFFICIAL_BASE_IMAGE_DIGEST="sha256:e20a28a4badee7d3de71881e7c2c160c7079465bf1ac21edec31a99c2602507d"
 readonly EXPECTED_BASE_COMMIT="e6072935bfa1036d4e20e8ed042ce1ff09872f57"
@@ -462,6 +462,28 @@ collect_evidence() {
       evidence_rc=1
     fi
   done
+
+  if [[ -n "$PF_PID" ]] && kill -0 "$PF_PID" 2>/dev/null; then
+    local state_status=""
+    if state_status="$(curl -sS --max-time 15 \
+      -o "$EVIDENCE_DIR/state-at-exit.json" \
+      -w '%{http_code}' \
+      "http://127.0.0.1:${LOCAL_PORT}/is_scaling_elastic_ep" \
+      2>"$EVIDENCE_DIR/state-at-exit.stderr")"; then
+      printf '%s\n' "$state_status" >"$EVIDENCE_DIR/state-at-exit.status"
+      if [[ "$state_status" =~ ^2[0-9][0-9]$ ]]; then
+        note "Captured recovery state at exit"
+      else
+        warn "state-at-exit endpoint returned HTTP $state_status"
+      fi
+    else
+      printf '%s\n' "transport-error" >"$EVIDENCE_DIR/state-at-exit.status"
+      warn "could not capture recovery state at exit; see state-at-exit.stderr"
+    fi
+  else
+    printf '%s\n' "port-forward-unavailable" >"$EVIDENCE_DIR/state-at-exit.status"
+    warn "could not capture recovery state at exit because port-forward is unavailable"
+  fi
 
   if [[ -n "$PF_PID" ]]; then
     kill "$PF_PID" >/dev/null 2>&1 || true
@@ -1530,7 +1552,11 @@ EOF
 
   [[ -n "$FAILED_POD_UID" ]] || die "failed allocation incarnation is missing"
   note "Publishing correlated failed-membership observation for incarnation $FAILED_POD_UID"
-  curl -fsS --max-time 60 \
+  local membership_http_status membership_curl_rc
+  set +e
+  membership_http_status="$(curl -sS --max-time 60 \
+    -o "$EVIDENCE_DIR/membership-observation.json" \
+    -w '%{http_code}' \
     -H 'Content-Type: application/json' \
     -d "$(jq -nc \
       --arg instance "$runtime_instance_id" \
@@ -1538,9 +1564,19 @@ EOF
       '{runtime_instance_id:$instance,topology_generation:0,rank:1,
         failed_allocation_incarnation:$incarnation,membership_epoch:1}')" \
     "http://127.0.0.1:${LOCAL_PORT}/observe_elastic_ep_membership" \
-    | tee "$EVIDENCE_DIR/membership-observation.json" | jq -e \
-      '(.observation_key | strings | length > 0) and
-       (.submission_id | strings | length > 0)' >/dev/null
+    2>"$EVIDENCE_DIR/membership-observation.stderr")"
+  membership_curl_rc=$?
+  set -e
+  printf '%s\n' "$membership_http_status" \
+    >"$EVIDENCE_DIR/membership-observation.status"
+  [[ "$membership_curl_rc" -eq 0 ]] || \
+    die "membership observation transport failed (curl exit $membership_curl_rc); see membership-observation.stderr"
+  [[ "$membership_http_status" =~ ^2[0-9][0-9]$ ]] || \
+    die "membership observation returned HTTP $membership_http_status; see membership-observation.json"
+  jq -e \
+    '(.observation_key | strings | length > 0) and
+     (.submission_id | strings | length > 0)' \
+    "$EVIDENCE_DIR/membership-observation.json" >/dev/null
   wait_for_recovery_observation "$runtime_instance_id"
 
   note "Authorizing fixed-slot recovery operation $OPERATION_ID"

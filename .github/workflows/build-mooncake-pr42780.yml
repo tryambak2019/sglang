@@ -7,6 +7,7 @@ on:
     paths:
       - validation/mooncake-pr42780.Dockerfile
       - validation/mooncake-sm100.patch
+      - validation/pr42780-native-inputs.txt
       - .github/workflows/build-mooncake-pr42780.yml
   workflow_dispatch:
 
@@ -21,7 +22,7 @@ concurrency:
 
 env:
   IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/sglang-pr42780-recovery
-  IMAGE_TAG: pr42780-2b035c7-mooncake-1c54e233-sm100
+  IMAGE_TAG: pr42780-162593a-mooncake-1c54e233-sm100
 
 jobs:
   build:
@@ -69,6 +70,8 @@ jobs:
           sbom: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          build-args: |
+            NATIVE_ARTIFACT_SOURCE_COMMIT=162593a1ba5c6b8227cc3f0678489069f7b65c3b
 
       - name: Resolve the runnable amd64 manifest digest
         id: digest
@@ -103,7 +106,8 @@ jobs:
             echo
             echo "Build index digest: \`${INDEX_DIGEST}\`"
             echo "Mooncake commit: \`1c54e233a22404692efd312739db749991d8d757\`"
-            echo "PR commit: \`2b035c7502102dc89c962c75417262809f2cf126\`"
+            echo "PR commit: \`162593a1ba5c6b8227cc3f0678489069f7b65c3b\`"
+            echo "TreeCore producing commit: \`162593a1ba5c6b8227cc3f0678489069f7b65c3b\`"
             echo "Mooncake CUDA architecture: \`100-real\`"
             echo "SGLang base digest: \`sha256:e20a28a4badee7d3de71881e7c2c160c7079465bf1ac21edec31a99c2602507d\`"
           } >> "$GITHUB_STEP_SUMMARY"

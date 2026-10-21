@@ -1,0 +1,14 @@
+# TreeCore native build inputs copied from the pinned PR archive.
+# Keep this list aligned with the pr-rust-builder COPY instructions.
+python/setup.py
+python/pyproject.toml
+python/sglang/srt/rust_extensions/torch_build.py
+rust/sglang-radix-tree/Cargo.toml
+rust/sglang-radix-tree/Cargo.lock
+rust/sglang-radix-tree/torch_compat.h
+rust/sglang-radix-tree/src/lib.rs
+rust/sglang-radix-tree/src/node.rs
+rust/sglang-radix-tree/src/python_bindings.rs
+rust/sglang-radix-tree/src/unified_lru_list.rs
+rust/sglang-radix-tree/src/unified_tree_core.rs
+rust/sglang-radix-tree/src/components/
