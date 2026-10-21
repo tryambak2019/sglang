@@ -5,14 +5,15 @@
 
 ARG SGLANG_BASE_IMAGE=lmsysorg/sglang@sha256:e20a28a4badee7d3de71881e7c2c160c7079465bf1ac21edec31a99c2602507d
 ARG REUSED_MOONCAKE_IMAGE=ghcr.io/tryambak2019/sglang-pr42780-recovery@sha256:61125246daa7194fa993b631a5012d61d7c4c79befc85f1e4e2311b57ff236a3
+ARG REUSED_RUNTIME_IMAGE=ghcr.io/tryambak2019/sglang-pr42780-recovery@sha256:6b3447e447aa26dc4c2caa309ef47ad03507b6cd9a694ccb171fb34b82c815a5
 
 # Keep PR acquisition independent of the expensive Mooncake compilation. A PR
 # update therefore invalidates only this small stage and the final image layer.
 FROM ${SGLANG_BASE_IMAGE} AS pr-source
 
-ARG SGLANG_PR_COMMIT=6c40dbfec2103245abbab0721265efa747ed72c5
+ARG SGLANG_PR_COMMIT=06d70f151668a69af64c2e6f2004ed8aa7d062fd
 ARG SGLANG_PR_REPOSITORY=tryambak2019/sglang
-ARG SGLANG_PR_ARCHIVE_SHA256=776568d15fc61182921d1c0934f1059a1f4ba272e8a2d32572e80d251e88d2e2
+ARG SGLANG_PR_ARCHIVE_SHA256=e4539319c79185cafa2e454c63a0e72db7d48b4702cd8205ac00106171e32393
 
 USER root
 WORKDIR /opt/pr-source
@@ -45,7 +46,7 @@ RUN set -eux; \
 # COPY sources, so unrelated PR Python changes retain this stage's cache.
 FROM pr-rust-toolchain AS pr-rust-builder
 
-ARG NATIVE_ARTIFACT_SOURCE_COMMIT=6c40dbfec2103245abbab0721265efa747ed72c5
+ARG NATIVE_ARTIFACT_SOURCE_COMMIT=06d70f151668a69af64c2e6f2004ed8aa7d062fd
 
 USER root
 COPY validation/pr42780-native-inputs.txt /opt/pr42780-native-inputs.txt
@@ -165,8 +166,8 @@ FROM ${SGLANG_BASE_IMAGE} AS runtime-rebuild-mooncake
 
 ARG MOONCAKE_BUILD_COMMIT=1c54e233a22404692efd312739db749991d8d757
 ARG SGLANG_BASE_IMAGE_DIGEST=sha256:e20a28a4badee7d3de71881e7c2c160c7079465bf1ac21edec31a99c2602507d
-ARG SGLANG_PR_COMMIT=6c40dbfec2103245abbab0721265efa747ed72c5
-ARG NATIVE_ARTIFACT_SOURCE_COMMIT=6c40dbfec2103245abbab0721265efa747ed72c5
+ARG SGLANG_PR_COMMIT=06d70f151668a69af64c2e6f2004ed8aa7d062fd
+ARG NATIVE_ARTIFACT_SOURCE_COMMIT=06d70f151668a69af64c2e6f2004ed8aa7d062fd
 ARG CUDA_ARCHITECTURE=100
 
 ENV MOONCAKE_BUILD_COMMIT=${MOONCAKE_BUILD_COMMIT} \
@@ -227,8 +228,8 @@ ARG REUSED_MOONCAKE_IMAGE=ghcr.io/tryambak2019/sglang-pr42780-recovery@sha256:61
 ARG REUSED_MOONCAKE_IMAGE_DIGEST=sha256:61125246daa7194fa993b631a5012d61d7c4c79befc85f1e4e2311b57ff236a3
 ARG MOONCAKE_BUILD_COMMIT=1c54e233a22404692efd312739db749991d8d757
 ARG SGLANG_BASE_IMAGE_DIGEST=sha256:e20a28a4badee7d3de71881e7c2c160c7079465bf1ac21edec31a99c2602507d
-ARG SGLANG_PR_COMMIT=6c40dbfec2103245abbab0721265efa747ed72c5
-ARG NATIVE_ARTIFACT_SOURCE_COMMIT=6c40dbfec2103245abbab0721265efa747ed72c5
+ARG SGLANG_PR_COMMIT=06d70f151668a69af64c2e6f2004ed8aa7d062fd
+ARG NATIVE_ARTIFACT_SOURCE_COMMIT=06d70f151668a69af64c2e6f2004ed8aa7d062fd
 ARG CUDA_ARCHITECTURE=100
 
 ENV MOONCAKE_BUILD_COMMIT=${MOONCAKE_BUILD_COMMIT} \
@@ -277,4 +278,99 @@ for method in ("adjust_component_size", "collect_path_info"):
     if not hasattr(binding, method):
         raise SystemExit(f"RustUnifiedTreeCoreBinding is missing {method}")
 print(f"loaded production Rust TreeCore from {module_path}")
+PY
+
+# Python-only candidates reuse both Mooncake and TreeCore from the last
+# verified runtime. The two source stages share the same immutable registry
+# base, while the final stage deletes the old PR tree before overlaying the new
+# archive. No Mooncake or Rust builder is reachable from this target.
+FROM ${REUSED_RUNTIME_IMAGE} AS pr-source-reuse-runtime
+
+ARG SGLANG_PR_COMMIT=06d70f151668a69af64c2e6f2004ed8aa7d062fd
+ARG SGLANG_PR_REPOSITORY=tryambak2019/sglang
+ARG SGLANG_PR_ARCHIVE_SHA256=e4539319c79185cafa2e454c63a0e72db7d48b4702cd8205ac00106171e32393
+
+USER root
+RUN set -eux; \
+    rm -rf /opt/pr-source; \
+    mkdir -p /opt/pr-source; \
+    archive=/tmp/sglang-pr.tar.gz; \
+    curl -fL --retry 3 --connect-timeout 15 --max-time 300 \
+      -o "${archive}" \
+      "https://github.com/${SGLANG_PR_REPOSITORY}/archive/${SGLANG_PR_COMMIT}.tar.gz"; \
+    echo "${SGLANG_PR_ARCHIVE_SHA256}  ${archive}" | sha256sum -c -; \
+    tar -xzf "${archive}" --strip-components=1 -C /opt/pr-source; \
+    printf '%s\n' "${SGLANG_PR_COMMIT}" > /opt/pr-source/.pr-head; \
+    test -f /opt/pr-source/python/sglang/srt/layers/moe/token_dispatcher/nixl.py
+
+FROM ${REUSED_RUNTIME_IMAGE} AS reused-runtime-artifacts
+
+FROM ${REUSED_RUNTIME_IMAGE} AS runtime-reuse-mooncake-and-treecore
+
+ARG REUSED_RUNTIME_IMAGE=ghcr.io/tryambak2019/sglang-pr42780-recovery@sha256:6b3447e447aa26dc4c2caa309ef47ad03507b6cd9a694ccb171fb34b82c815a5
+ARG REUSED_RUNTIME_IMAGE_DIGEST=sha256:6b3447e447aa26dc4c2caa309ef47ad03507b6cd9a694ccb171fb34b82c815a5
+ARG MOONCAKE_BUILD_COMMIT=1c54e233a22404692efd312739db749991d8d757
+ARG SGLANG_BASE_IMAGE_DIGEST=sha256:e20a28a4badee7d3de71881e7c2c160c7079465bf1ac21edec31a99c2602507d
+ARG SGLANG_PR_COMMIT=06d70f151668a69af64c2e6f2004ed8aa7d062fd
+ARG NATIVE_ARTIFACT_SOURCE_COMMIT=6c40dbfec2103245abbab0721265efa747ed72c5
+ARG NATIVE_ARTIFACT_SHA256=21f2f46c2cf958139b6ea52746da84bfb43cd535850a9073336cf773aa3f981c
+ARG NATIVE_INPUTS_SHA256=05e71eb6f5bac4e9103172f93ba8cfe676ab5a74ea5cbee16910936f1fbb4c9b
+ARG CUDA_ARCHITECTURE=100
+
+ENV MOONCAKE_BUILD_COMMIT=${MOONCAKE_BUILD_COMMIT} \
+    SGLANG_BASE_IMAGE_DIGEST=${SGLANG_BASE_IMAGE_DIGEST} \
+    SGLANG_PR_COMMIT=${SGLANG_PR_COMMIT} \
+    SGLANG_NATIVE_ARTIFACT_SOURCE_COMMIT=${NATIVE_ARTIFACT_SOURCE_COMMIT} \
+    SGLANG_REUSED_RUNTIME_IMAGE_DIGEST=${REUSED_RUNTIME_IMAGE_DIGEST} \
+    PYTHONPATH=/opt/pr-source/python
+
+LABEL org.opencontainers.image.title="SGLang PR 42780 Mooncake validation dependency" \
+      org.opencontainers.image.description="Pinned Mooncake and TreeCore runtime overlaid with Python-only PR 42780 source" \
+      org.opencontainers.image.base.digest=${SGLANG_BASE_IMAGE_DIGEST} \
+      org.opencontainers.image.revision=${SGLANG_PR_COMMIT} \
+      ai.mooncake.source.revision=${MOONCAKE_BUILD_COMMIT} \
+      ai.sglang.reused-runtime.image=${REUSED_RUNTIME_IMAGE} \
+      ai.sglang.reused-runtime.digest=${REUSED_RUNTIME_IMAGE_DIGEST} \
+      ai.sglang.native-artifact.source.revision=${NATIVE_ARTIFACT_SOURCE_COMMIT} \
+      ai.sglang.native-artifact.digest=${NATIVE_ARTIFACT_SHA256} \
+      ai.sglang.native-inputs.digest=${NATIVE_INPUTS_SHA256} \
+      ai.mooncake.cuda.architecture=${CUDA_ARCHITECTURE} \
+      org.opencontainers.image.source="https://github.com/tryambak2019/sglang"
+
+USER root
+RUN rm -rf /opt/pr-source
+COPY --from=pr-source-reuse-runtime /opt/pr-source/ /opt/pr-source/
+COPY --from=reused-runtime-artifacts /opt/pr-source/python/sglang/srt/mem_cache/rust_tree_core/mem_cache.*.so /opt/pr-source/python/sglang/srt/mem_cache/rust_tree_core/
+COPY --from=reused-runtime-artifacts /opt/pr-source/python/sglang/srt/mem_cache/rust_tree_core/build-metadata.env /opt/pr-source/python/sglang/srt/mem_cache/rust_tree_core/build-metadata.env
+
+RUN set -eux; \
+    test "$(cat /opt/pr-source/.pr-head)" = "${SGLANG_PR_COMMIT}"; \
+    test "${REUSED_RUNTIME_IMAGE}" = "ghcr.io/tryambak2019/sglang-pr42780-recovery@${REUSED_RUNTIME_IMAGE_DIGEST}"; \
+    test "${MOONCAKE_BUILD_COMMIT}" = "1c54e233a22404692efd312739db749991d8d757"; \
+    metadata=/opt/pr-source/python/sglang/srt/mem_cache/rust_tree_core/build-metadata.env; \
+    extension="$(find /opt/pr-source/python/sglang/srt/mem_cache/rust_tree_core -maxdepth 1 -type f -name 'mem_cache.*.so' -print -quit)"; \
+    test -n "${extension}"; \
+    echo "${NATIVE_ARTIFACT_SHA256}  ${extension}" | sha256sum -c -; \
+    grep -Fx "source_revision=${NATIVE_ARTIFACT_SOURCE_COMMIT}" "${metadata}"; \
+    grep -Fx "artifact_sha256=${NATIVE_ARTIFACT_SHA256}" "${metadata}"; \
+    grep -Fx "native_inputs_sha256=${NATIVE_INPUTS_SHA256}" "${metadata}"; \
+    python -c 'import torch; assert torch.__version__.split("+")[0] == "2.14.1", torch.__version__'; \
+    python -m mooncake.pg --report; \
+    cat "${metadata}"; \
+    python -c 'import pathlib, sglang; p=pathlib.Path(sglang.__file__).resolve(); assert str(p).startswith("/opt/pr-source/python/"), p; print(p)'
+
+RUN PYTHONPATH=/opt/pr-source/python SGLANG_RUST_BUILD_MODE=never python - <<'PY'
+from pathlib import Path
+
+from sglang.srt.mem_cache.rust_tree_core.extension import bindings
+
+module_path = Path(bindings.__file__).resolve()
+expected_root = Path("/opt/pr-source/python").resolve()
+if expected_root not in module_path.parents:
+    raise SystemExit(f"Rust TreeCore was not loaded from embedded PR source: {module_path}")
+binding = bindings.RustUnifiedTreeCoreBinding
+for method in ("adjust_component_size", "collect_path_info"):
+    if not hasattr(binding, method):
+        raise SystemExit(f"RustUnifiedTreeCoreBinding is missing {method}")
+print(f"loaded reused production Rust TreeCore from {module_path}")
 PY

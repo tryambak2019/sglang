@@ -75,7 +75,7 @@
 set -Eeuo pipefail
 
 readonly PR_NUMBER="42780"
-readonly EXPECTED_PR_SHA="6c40dbfec2103245abbab0721265efa747ed72c5"
+readonly EXPECTED_PR_SHA="06d70f151668a69af64c2e6f2004ed8aa7d062fd"
 readonly APP="sglang-nixl-recovery"
 readonly OFFICIAL_BASE_IMAGE_DIGEST="sha256:e20a28a4badee7d3de71881e7c2c160c7079465bf1ac21edec31a99c2602507d"
 readonly EXPECTED_BASE_COMMIT="e6072935bfa1036d4e20e8ed042ce1ff09872f57"
@@ -1554,7 +1554,7 @@ EOF
   note "Publishing correlated failed-membership observation for incarnation $FAILED_POD_UID"
   local membership_http_status membership_curl_rc
   set +e
-  membership_http_status="$(curl -sS --max-time 60 \
+  membership_http_status="$(curl -sS --max-time 75 \
     -o "$EVIDENCE_DIR/membership-observation.json" \
     -w '%{http_code}' \
     -H 'Content-Type: application/json' \
