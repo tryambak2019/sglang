@@ -75,7 +75,7 @@
 set -Eeuo pipefail
 
 readonly PR_NUMBER="42780"
-readonly EXPECTED_PR_SHA="f481ab6a87c4c4aea4ac38f040b051a0ee4da8ae"
+readonly EXPECTED_PR_SHA="2b035c7502102dc89c962c75417262809f2cf126"
 readonly APP="sglang-nixl-recovery"
 readonly OFFICIAL_BASE_IMAGE_DIGEST="sha256:e20a28a4badee7d3de71881e7c2c160c7079465bf1ac21edec31a99c2602507d"
 readonly EXPECTED_BASE_COMMIT="e6072935bfa1036d4e20e8ed042ce1ff09872f57"
@@ -1538,7 +1538,9 @@ EOF
       '{runtime_instance_id:$instance,topology_generation:0,rank:1,
         failed_allocation_incarnation:$incarnation,membership_epoch:1}')" \
     "http://127.0.0.1:${LOCAL_PORT}/observe_elastic_ep_membership" \
-    | tee "$EVIDENCE_DIR/membership-observation.json" | jq -e '.observation_key' >/dev/null
+    | tee "$EVIDENCE_DIR/membership-observation.json" | jq -e \
+      '(.observation_key | strings | length > 0) and
+       (.submission_id | strings | length > 0)' >/dev/null
   wait_for_recovery_observation "$runtime_instance_id"
 
   note "Authorizing fixed-slot recovery operation $OPERATION_ID"
