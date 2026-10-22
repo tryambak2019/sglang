@@ -14,7 +14,8 @@
 # digest is the immutable validation artifact; Pods do not download PR source.
 #
 # Final verdicts are conservative:
-#   YES          correlated recovery reached ready and recovered-rank inference passed
+#   YES          correlated recovery reached ready, endpoint scope isolation was proved,
+#                and recovered-rank inference passed
 #   NO           correlated terminal failure after all NIXL recovery prerequisites passed
 #   INCONCLUSIVE infrastructure, timeout, or uncorrelated failure prevented either result
 #
@@ -365,13 +366,13 @@ write_summary() {
     echo
     echo "## Verdict criteria"
     echo
-    echo "- **YES:** the correlated recovery reached \`ready\` for the expected operation, allocation, rank offset, and topology generation, then inference succeeded through recovered rank 1."
+    echo "- **YES:** the correlated recovery reached \`ready\` for the expected operation, allocation, rank offset, and topology generation; TCPStore endpoint scope isolation was proved; then inference succeeded through recovered rank 1."
     echo "- **NO:** after prerequisites and baseline succeeded, SGLang reported \`recovery_phase=failed\` and \`recovery_succeeded=false\` for that exact correlated NIXL fixed-slot recovery operation."
     echo "- **INCONCLUSIVE:** RBAC, image, model, scheduling, network, RDMA, timeout, pod, evidence, or any uncorrelated/unclassified failure prevented a valid YES/NO result."
     echo
     echo "## Evidence"
     echo
-    echo "Attach this directory (or its archive) with \`run.log\`, \`run.env\`, pod logs/descriptions, state JSON, image IDs, and old-process termination proof."
+    echo "Attach this directory (or its archive) with \`run.log\`, \`run.env\`, pod logs/descriptions, state JSON, \`endpoint-scope-proof.json\`, image IDs, and old-process termination proof."
     echo
     echo "> Warning: this validates the exact PR Python source over a pinned official image; it is not evidence of a container built wholly from the PR."
     if [[ -s "$EVENT_LOG" ]]; then
@@ -1324,8 +1325,100 @@ prefix = (
     + quote(os.environ["FAILED_ALLOCATION_ID"], safe="") + "/"
 )
 dist.PrefixStore(prefix, store).set("NIXL_EP/1", b"stale-endpoint")
-print(prefix)
-' | tee "$EVIDENCE_DIR/stale-endpoint-prefix.txt"
+'
+}
+
+capture_endpoint_scope_proof() {
+  local runtime_instance_id="$1" proof proof_tmp
+  proof_tmp="$EVIDENCE_DIR/.endpoint-scope-proof.json.tmp"
+  note "Verifying stale endpoint isolation in TCPStore without exposing endpoint payloads"
+  proof="$(kube_with_timeout "$COMMAND_TIMEOUT_SECONDS" exec \
+    -n "$NAMESPACE" "$PRIMARY_POD" -- env \
+    RUNTIME_INSTANCE_ID="$runtime_instance_id" \
+    FAILED_ALLOCATION_ID="$FAILED_ALLOCATION_ID" \
+    OPERATION_ID="$OPERATION_ID" \
+    REPLACEMENT_ALLOCATION_ID="$REPLACEMENT_ALLOCATION_ID" \
+    python3 -c '
+import hashlib
+import json
+import os
+from datetime import timedelta
+from urllib.parse import quote
+
+import torch.distributed as dist
+
+endpoint_key = "NIXL_EP/1"
+poison = b"stale-endpoint"
+base_prefix = (
+    "elastic_ep/nixl_recovery/"
+    + quote(os.environ["RUNTIME_INSTANCE_ID"], safe="") + "/0/"
+)
+stale_prefix = (
+    base_prefix
+    + quote("stale-operation", safe="") + "/"
+    + quote(os.environ["FAILED_ALLOCATION_ID"], safe="") + "/"
+)
+current_prefix = (
+    base_prefix
+    + quote(os.environ["OPERATION_ID"], safe="") + "/"
+    + quote(os.environ["REPLACEMENT_ALLOCATION_ID"], safe="") + "/"
+)
+
+store = dist.TCPStore("127.0.0.1", 26555, world_size=None,
+                      is_master=False, wait_for_workers=False)
+store.set_timeout(timedelta(seconds=15))
+stale_value = dist.PrefixStore(stale_prefix, store).get(endpoint_key)
+current_value = dist.PrefixStore(current_prefix, store).get(endpoint_key)
+
+sha256 = lambda value: hashlib.sha256(value).hexdigest()
+poison_sha256 = sha256(poison)
+stale_value_sha256 = sha256(stale_value)
+current_value_sha256 = sha256(current_value)
+stale_key_sha256 = sha256((stale_prefix + endpoint_key).encode())
+current_key_sha256 = sha256((current_prefix + endpoint_key).encode())
+print(json.dumps({
+    "stale_key_sha256": stale_key_sha256,
+    "current_key_sha256": current_key_sha256,
+    "keys_are_distinct": stale_key_sha256 != current_key_sha256,
+    "stale_key_present": True,
+    "stale_value_sha256": stale_value_sha256,
+    "poison_sha256": poison_sha256,
+    "stale_value_matches_poison_sha256": stale_value_sha256 == poison_sha256,
+    "current_key_present": True,
+    "current_value_sha256": current_value_sha256,
+    "current_value_differs_from_poison_sha256": current_value_sha256 != poison_sha256,
+    "recovered_rank_1_inference_succeeded": False,
+}, sort_keys=True))
+')"
+  printf '%s\n' "$proof" | jq -e '
+    (.stale_key_sha256 | test("^[0-9a-f]{64}$")) and
+    (.current_key_sha256 | test("^[0-9a-f]{64}$")) and
+    (.stale_value_sha256 | test("^[0-9a-f]{64}$")) and
+    (.poison_sha256 | test("^[0-9a-f]{64}$")) and
+    (.current_value_sha256 | test("^[0-9a-f]{64}$")) and
+    .keys_are_distinct == true and
+    .stale_key_present == true and
+    .stale_value_matches_poison_sha256 == true and
+    .current_key_present == true and
+    .current_value_differs_from_poison_sha256 == true and
+    .recovered_rank_1_inference_succeeded == false
+  ' >"$proof_tmp"
+  mv "$proof_tmp" "$EVIDENCE_DIR/endpoint-scope-proof.json"
+}
+
+mark_endpoint_scope_inference_succeeded() {
+  local proof="$EVIDENCE_DIR/endpoint-scope-proof.json"
+  local proof_tmp="$EVIDENCE_DIR/.endpoint-scope-proof.json.tmp"
+  jq -e '.recovered_rank_1_inference_succeeded = true' "$proof" >"$proof_tmp"
+  mv "$proof_tmp" "$proof"
+  jq -e '
+    .keys_are_distinct == true and
+    .stale_key_present == true and
+    .stale_value_matches_poison_sha256 == true and
+    .current_key_present == true and
+    .current_value_differs_from_poison_sha256 == true and
+    .recovered_rank_1_inference_succeeded == true
+  ' "$proof" >/dev/null
 }
 
 wait_for_recovery_ready() {
@@ -1618,8 +1711,11 @@ EOF
   note "NIXL recovery preconditions verified; a correlated terminal SGLang failure can now produce VERDICT=NO"
   wait_for_recovery_ready
   mark_stage recovery-ready complete
+  capture_endpoint_scope_proof "$runtime_instance_id"
+  mark_stage endpoint-scope-proof verified
   note "Routing inference explicitly through recovered DP/EP rank 1"
   generate recovered-rank1 1
+  mark_endpoint_scope_inference_succeeded
   get_state | tee "$EVIDENCE_DIR/state-final.json" | jq -e \
     --arg op "$OPERATION_ID" \
     --arg alloc "$REPLACEMENT_ALLOCATION_ID" \
@@ -1630,7 +1726,7 @@ EOF
 
   TEST_SUCCEEDED=true
   VERDICT="YES"
-  VERDICT_REASON="correlated fixed-slot recovery reached ready and inference completed through recovered rank 1"
+  VERDICT_REASON="correlated fixed-slot recovery reached ready, TCPStore endpoint scope isolation was proved, and inference completed through recovered rank 1"
   succeed "VERDICT=YES: $VERDICT_REASON"
   mark_stage validation complete
 }
