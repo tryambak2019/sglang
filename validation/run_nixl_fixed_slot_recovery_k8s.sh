@@ -132,6 +132,8 @@ SERVICE="${APP}-primary-${RUN_ID}"
 EVIDENCE_DIR="${EVIDENCE_DIR:-$(pwd)/recovery-evidence-${RUN_ID}}"
 PF_PID=""
 TEST_SUCCEEDED=false
+ENDPOINT_SCOPE_PROVED=false
+RECOVERED_RANK_INFERENCE_SUCCEEDED=false
 VERDICT="INCONCLUSIVE"
 VERDICT_REASON="validation did not reach a conclusive NIXL recovery result"
 NIXL_RECOVERY_PRECONDITIONS_VERIFIED=false
@@ -356,6 +358,8 @@ write_summary() {
     echo "- Mooncake IB devices: \`${MOONCAKE_IB_DEVICE}\`"
     echo "- Failed rank-1 Pod UID: \`${FAILED_POD_UID:-unavailable}\`"
     echo "- Replacement rank-1 Pod UID: \`${REPLACEMENT_POD_UID:-unavailable}\`"
+    echo "- Endpoint scope proof passed: \`${ENDPOINT_SCOPE_PROVED}\`"
+    echo "- Recovered-rank inference passed: \`${RECOVERED_RANK_INFERENCE_SUCCEEDED}\`"
     echo "- GPU Pod active deadline: \`${POD_ACTIVE_DEADLINE_SECONDS}s\`"
     echo "- Exit code: \`${rc}\`"
     [[ -z "$FAILURE_MESSAGE" ]] || echo "- Error: ${FAILURE_MESSAGE}"
@@ -420,6 +424,8 @@ collect_evidence() {
     printf 'failure_command=%q\n' "$FAILURE_COMMAND"
     echo "exit_code=$rc"
     echo "test_succeeded=$TEST_SUCCEEDED"
+    echo "endpoint_scope_proved=$ENDPOINT_SCOPE_PROVED"
+    echo "recovered_rank_inference_succeeded=$RECOVERED_RANK_INFERENCE_SUCCEEDED"
     echo "nixl_recovery_preconditions_verified=$NIXL_RECOVERY_PRECONDITIONS_VERIFIED"
     echo "verdict=$VERDICT"
     printf 'verdict_reason=%q\n' "$VERDICT_REASON"
@@ -1329,10 +1335,9 @@ dist.PrefixStore(prefix, store).set("NIXL_EP/1", b"stale-endpoint")
 }
 
 capture_endpoint_scope_proof() {
-  local runtime_instance_id="$1" proof proof_tmp
-  proof_tmp="$EVIDENCE_DIR/.endpoint-scope-proof.json.tmp"
-  note "Verifying stale endpoint isolation in TCPStore without exposing endpoint payloads"
-  proof="$(kube_with_timeout "$COMMAND_TIMEOUT_SECONDS" exec \
+  local runtime_instance_id="$1" proof
+  note "Verifying stale endpoint isolation and durable recovery connection markers without exposing endpoint payloads"
+  if ! proof="$(kube_with_timeout "$COMMAND_TIMEOUT_SECONDS" exec \
     -n "$NAMESPACE" "$PRIMARY_POD" -- env \
     RUNTIME_INSTANCE_ID="$runtime_instance_id" \
     FAILED_ALLOCATION_ID="$FAILED_ALLOCATION_ID" \
@@ -1348,7 +1353,9 @@ from urllib.parse import quote
 import torch.distributed as dist
 
 endpoint_key = "NIXL_EP/1"
+connected_keys = ("connected/0", "connected/1")
 poison = b"stale-endpoint"
+connected_value = b"1"
 base_prefix = (
     "elastic_ep/nixl_recovery/"
     + quote(os.environ["RUNTIME_INSTANCE_ID"], safe="") + "/0/"
@@ -1366,59 +1373,108 @@ current_prefix = (
 
 store = dist.TCPStore("127.0.0.1", 26555, world_size=None,
                       is_master=False, wait_for_workers=False)
-store.set_timeout(timedelta(seconds=15))
-stale_value = dist.PrefixStore(stale_prefix, store).get(endpoint_key)
-current_value = dist.PrefixStore(current_prefix, store).get(endpoint_key)
+store.set_timeout(timedelta(seconds=5))
+stale_store = dist.PrefixStore(stale_prefix, store)
+current_store = dist.PrefixStore(current_prefix, store)
 
-sha256 = lambda value: hashlib.sha256(value).hexdigest()
+stale_key_present = stale_store.check([endpoint_key])
+stale_value = stale_store.get(endpoint_key) if stale_key_present else None
+current_endpoint_key_present_after_ready = current_store.check([endpoint_key])
+connected_key_presence = {
+    key: current_store.check([key]) for key in connected_keys
+}
+connected_values = {
+    key: current_store.get(key) if connected_key_presence[key] else None
+    for key in connected_keys
+}
+
+sha256 = lambda value: hashlib.sha256(value).hexdigest() if value is not None else None
 poison_sha256 = sha256(poison)
 stale_value_sha256 = sha256(stale_value)
-current_value_sha256 = sha256(current_value)
 stale_key_sha256 = sha256((stale_prefix + endpoint_key).encode())
 current_key_sha256 = sha256((current_prefix + endpoint_key).encode())
+connected_key_sha256 = {
+    key: sha256((current_prefix + key).encode()) for key in connected_keys
+}
+connected_value_sha256 = {
+    key: sha256(value) for key, value in connected_values.items()
+}
+expected_connected_value_sha256 = sha256(connected_value)
 print(json.dumps({
     "stale_key_sha256": stale_key_sha256,
     "current_key_sha256": current_key_sha256,
     "keys_are_distinct": stale_key_sha256 != current_key_sha256,
-    "stale_key_present": True,
+    "stale_key_present": stale_key_present,
     "stale_value_sha256": stale_value_sha256,
     "poison_sha256": poison_sha256,
     "stale_value_matches_poison_sha256": stale_value_sha256 == poison_sha256,
-    "current_key_present": True,
-    "current_value_sha256": current_value_sha256,
-    "current_value_differs_from_poison_sha256": current_value_sha256 != poison_sha256,
-    "recovered_rank_1_inference_succeeded": False,
+    "current_endpoint_key_present_after_ready": current_endpoint_key_present_after_ready,
+    "current_endpoint_is_transient": not current_endpoint_key_present_after_ready,
+    "connected_key_sha256": connected_key_sha256,
+    "connected_key_presence": connected_key_presence,
+    "connected_value_sha256": connected_value_sha256,
+    "expected_connected_value_sha256": expected_connected_value_sha256,
+    "connection_markers_present": all(connected_key_presence.values()),
+    "connection_markers_match_expected_sha256": all(
+        digest == expected_connected_value_sha256
+        for digest in connected_value_sha256.values()
+    ),
 }, sort_keys=True))
-')"
-  printf '%s\n' "$proof" | jq -e '
+' 2>"$EVIDENCE_DIR/endpoint-scope-proof.stderr")"; then
+    warn "TCPStore endpoint scope probe could not execute; recovered-rank inference will still run"
+    return 1
+  fi
+  printf '%s\n' "$proof" | jq . >"$EVIDENCE_DIR/endpoint-scope-proof.json"
+  jq -e '
     (.stale_key_sha256 | test("^[0-9a-f]{64}$")) and
     (.current_key_sha256 | test("^[0-9a-f]{64}$")) and
     (.stale_value_sha256 | test("^[0-9a-f]{64}$")) and
     (.poison_sha256 | test("^[0-9a-f]{64}$")) and
-    (.current_value_sha256 | test("^[0-9a-f]{64}$")) and
+    (.expected_connected_value_sha256 | test("^[0-9a-f]{64}$")) and
+    ([.connected_key_sha256[] | test("^[0-9a-f]{64}$")] | all) and
+    ([.connected_value_sha256[] | test("^[0-9a-f]{64}$")] | all) and
     .keys_are_distinct == true and
     .stale_key_present == true and
     .stale_value_matches_poison_sha256 == true and
-    .current_key_present == true and
-    .current_value_differs_from_poison_sha256 == true and
-    .recovered_rank_1_inference_succeeded == false
-  ' >"$proof_tmp"
-  mv "$proof_tmp" "$EVIDENCE_DIR/endpoint-scope-proof.json"
+    .connection_markers_present == true and
+    .connection_markers_match_expected_sha256 == true
+  ' "$EVIDENCE_DIR/endpoint-scope-proof.json" >/dev/null
 }
 
-mark_endpoint_scope_inference_succeeded() {
-  local proof="$EVIDENCE_DIR/endpoint-scope-proof.json"
-  local proof_tmp="$EVIDENCE_DIR/.endpoint-scope-proof.json.tmp"
-  jq -e '.recovered_rank_1_inference_succeeded = true' "$proof" >"$proof_tmp"
-  mv "$proof_tmp" "$proof"
-  jq -e '
-    .keys_are_distinct == true and
-    .stale_key_present == true and
-    .stale_value_matches_poison_sha256 == true and
-    .current_key_present == true and
-    .current_value_differs_from_poison_sha256 == true and
-    .recovered_rank_1_inference_succeeded == true
-  ' "$proof" >/dev/null
+record_recovered_rank_inference_result() {
+  local succeeded="$1" reason="$2" response_sha256=""
+  if [[ -s "$EVIDENCE_DIR/recovered-rank1.json" ]]; then
+    response_sha256="$(sha256sum "$EVIDENCE_DIR/recovered-rank1.json" | cut -d' ' -f1)"
+  fi
+  jq -n \
+    --argjson succeeded "$succeeded" \
+    --arg reason "$reason" \
+    --arg response_sha256 "$response_sha256" \
+    '{succeeded:$succeeded,reason:$reason,response_sha256:$response_sha256}' \
+    >"$EVIDENCE_DIR/recovered-rank1-inference-proof.json"
+}
+
+collect_post_recovery_evidence() {
+  local runtime_instance_id="$1"
+  if capture_endpoint_scope_proof "$runtime_instance_id"; then
+    ENDPOINT_SCOPE_PROVED=true
+    mark_stage endpoint-scope-proof verified
+  else
+    warn "Endpoint scope proof failed; continuing to recovered-rank inference for independent evidence"
+    mark_stage endpoint-scope-proof failed
+  fi
+  note "Routing inference explicitly through recovered DP/EP rank 1"
+  if generate recovered-rank1 1; then
+    RECOVERED_RANK_INFERENCE_SUCCEEDED=true
+    record_recovered_rank_inference_result true "explicitly routed rank-1 inference succeeded"
+    mark_stage recovered-rank1-inference succeeded
+  else
+    record_recovered_rank_inference_result false "explicitly routed rank-1 inference failed"
+    warn "Recovered-rank inference failed; preserving its evidence independently from the scope probe"
+    mark_stage recovered-rank1-inference failed
+  fi
+  [[ "$ENDPOINT_SCOPE_PROVED" == true && \
+     "$RECOVERED_RANK_INFERENCE_SUCCEEDED" == true ]]
 }
 
 wait_for_recovery_ready() {
@@ -1811,11 +1867,7 @@ EOF
   note "NIXL recovery preconditions verified; a correlated terminal SGLang failure can now produce VERDICT=NO"
   wait_for_recovery_ready
   mark_stage recovery-ready complete
-  capture_endpoint_scope_proof "$runtime_instance_id"
-  mark_stage endpoint-scope-proof verified
-  note "Routing inference explicitly through recovered DP/EP rank 1"
-  generate recovered-rank1 1
-  mark_endpoint_scope_inference_succeeded
+  collect_post_recovery_evidence "$runtime_instance_id" || true
   get_state | tee "$EVIDENCE_DIR/state-final.json" | jq -e \
     --arg op "$OPERATION_ID" \
     --arg alloc "$REPLACEMENT_ALLOCATION_ID" \
@@ -1823,6 +1875,11 @@ EOF
      .recovery_phase == "ready" and .recovery_succeeded == true and
      .recovery_operation_id == $op and .recovery_allocation_id == $alloc and
      .recovery_rank_offset == 1 and .recovery_topology_generation == 0' >/dev/null
+
+  if [[ "$ENDPOINT_SCOPE_PROVED" != true || \
+        "$RECOVERED_RANK_INFERENCE_SUCCEEDED" != true ]]; then
+    die "recovery reached ready but endpoint scope proof and recovered-rank inference did not both pass (endpoint_scope_proved=$ENDPOINT_SCOPE_PROVED recovered_rank_inference_succeeded=$RECOVERED_RANK_INFERENCE_SUCCEEDED)"
+  fi
 
   TEST_SUCCEEDED=true
   VERDICT="YES"
