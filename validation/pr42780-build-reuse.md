@@ -1,5 +1,34 @@
 # PR 42780 build-reuse record
 
+## Pre-build classification for `31a9275785295336a36961604772deccdd92a982`
+
+- Previous candidate source: `516b449c4a6a2f5e7a1099ada6207ad4347be909`
+- Candidate source: `31a9275785295336a36961604772deccdd92a982`
+- Target: Linux AMD64, B200/SM100, CUDA architecture `100-real`
+- Full changed-path command: `git diff --name-only 516b449c4a6a2f5e7a1099ada6207ad4347be909..31a9275785295336a36961604772deccdd92a982`
+- Full changed-path result: 222 paths; SHA-256 `d21d6b094d9f9db77e0f8f132d6d0df620d1bc68832bab5c92ca09c7410860b3`
+- Whitespace-only equivalence: false
+- Candidate archive SHA-256: `7c0bc56456fd6c144711f89d99db174c28d4d649a7bf0ef5b55efaf95eba7051`
+
+| Classification | Value | Evidence |
+| --- | --- | --- |
+| `mooncake_inputs_changed` | `false` | Mooncake commit, SM100 patch, CUDA architecture, base-image digest, Torch/CUDA ABI, builder commands, and PG inputs are unchanged. |
+| `native_inputs_changed` | `false` | The exact path-limited comparison over `pr42780-native-inputs.txt` returned no paths. |
+| `python_behavior_changed` | `true` | Membership observation now synchronously fences the failed slot, propagates the survivor view to tokenizer fan-out and DPC routing, and masks stale activation until matching recovery success. |
+| `formatting_only` | `false` | The candidate contains behavioral and upstream changes and is not whitespace-equivalent. |
+
+### Selected reuse path
+
+- Reuse immutable full runtime `ghcr.io/tryambak2019/sglang-pr42780-recovery@sha256:d62346c2b91b261398c0fb203d72f97186477c03dbf6ed6eba5746630813ae78`.
+- Select `runtime-reuse-mooncake-and-treecore`; neither native build graph is reachable from this target.
+- Reuse TreeCore artifact `21f2f46c2cf958139b6ea52746da84bfb43cd535850a9073336cf773aa3f981c`, native-input digest `be7b35636f853e8917c2c5185bc04b6737d1d84c1b3eaddc6c4be84d6cda93f1`, produced by `516b449c4a6a2f5e7a1099ada6207ad4347be909`.
+- Do not run disk reclamation or export a GHA build cache. The immutable GHCR runtime remains the cache boundary.
+- Expected duration is the prior Python-only range (about 15 minutes), dominated by source download, SBOM, attestation, and OCI export rather than compilation.
+
+### Post-build record
+
+- Pending.
+
 ## Pre-build classification for `516b449c4a6a2f5e7a1099ada6207ad4347be909`
 
 - Previous candidate source: `06d70f151668a69af64c2e6f2004ed8aa7d062fd`
