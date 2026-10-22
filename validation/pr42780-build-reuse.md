@@ -35,4 +35,17 @@
 
 ## Post-build record
 
-Pending workflow completion. Record the workflow SHA, index and AMD64 digests, reused Mooncake digest, candidate PR SHA, new TreeCore artifact/input digests, observed registry transfer/export duration, total build duration, and any divergence from the plan above.
+- Workflow run: `39708245147`
+- Validation commit: `caf981459e2baa461e4bdea27231450cd3457bcb`
+- Result: success in 16m30s; build/push step 15m41s.
+- Build index digest: `sha256:e4ab2b724bab9abc5e0c9a4716c630b90ca48bfd9bfa0ae6ea5aa0134097902a`
+- Runnable Linux AMD64 digest: `sha256:d62346c2b91b261398c0fb203d72f97186477c03dbf6ed6eba5746630813ae78`
+- Attestation manifest: `sha256:f4e73e04e72db8cce7f898209cab5c41edc3c07d9a40bc33f41c8bbd4edef039`
+- Reused Mooncake digest: `sha256:61125246daa7194fa993b631a5012d61d7c4c79befc85f1e4e2311b57ff236a3`
+- Candidate PR and TreeCore producing commit: `516b449c4a6a2f5e7a1099ada6207ad4347be909`
+- New TreeCore native-input digest: `be7b35636f853e8917c2c5185bc04b6737d1d84c1b3eaddc6c4be84d6cda93f1`
+- TreeCore artifact digest: `21f2f46c2cf958139b6ea52746da84bfb43cd535850a9073336cf773aa3f981c`
+- TreeCore rebuilt in 129.4s and loaded from the embedded candidate source with `SGLANG_RUST_BUILD_MODE=never`.
+- SBOM generation took 197.2s. OCI export, attestation, and two-tag push took 151.6s; layer pushes themselves took 3.1s and 0.5s.
+- The BuildKit graph selected `runtime-reuse-mooncake`; it contains `pr-rust-builder` and no `mooncake-builder` execution. There was no GHA cache export or disk reclamation.
+- Published image config reports Torch `2.14.1+cu130`, Mooncake PG cache status `ready`, Mooncake source `1c54e233a22404692efd312739db749991d8d757`, base digest `sha256:e20a28a4badee7d3de71881e7c2c160c7079465bf1ac21edec31a99c2602507d`, and PR revision `516b449c4a6a2f5e7a1099ada6207ad4347be909`.
