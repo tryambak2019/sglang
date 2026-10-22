@@ -374,6 +374,21 @@ write_summary() {
       echo "- Failed command: \`${FAILURE_COMMAND//\`/\\\`}\`"
     fi
     echo
+    echo "## Rank-1 inference proof"
+    echo
+    echo "- Identical request bodies: \`$(rank1_proof_value requests_equal)\`"
+    echo "- Healthy request SHA-256: \`$(rank1_proof_value healthy_request_sha256)\`"
+    echo "- Recovered request SHA-256: \`$(rank1_proof_value recovered_request_sha256)\`"
+    echo "- Healthy dp_rank: \`$(rank1_proof_value healthy_dp_rank)\`"
+    echo "- Recovered dp_rank: \`$(rank1_proof_value recovered_dp_rank)\`"
+    echo "- Exact output_ids match: \`$(rank1_proof_value output_ids_equal)\`"
+    echo "- Healthy output_ids SHA-256: \`$(rank1_proof_value healthy_output_ids_sha256)\`"
+    echo "- Recovered output_ids SHA-256: \`$(rank1_proof_value recovered_output_ids_sha256)\`"
+    echo "- Healthy/recovered completion tokens: \`$(rank1_proof_value healthy_completion_tokens) / $(rank1_proof_value recovered_completion_tokens)\`"
+    echo "- Healthy/recovered finish reason: \`$(rank1_proof_value healthy_finish_reason) / $(rank1_proof_value recovered_finish_reason)\`"
+    echo "- Healthy/recovered weight version: \`$(rank1_proof_value healthy_weight_version) / $(rank1_proof_value recovered_weight_version)\`"
+    echo "- Healthy/recovered retractions: \`$(rank1_proof_value healthy_num_retractions) / $(rank1_proof_value recovered_num_retractions)\`"
+    echo
     echo "## Verdict criteria"
     echo
     echo "- **YES:** the correlated recovery reached \`ready\` for the expected operation, allocation, rank offset, and topology generation; TCPStore endpoint scope isolation was proved; then replacement rank 1 produced exactly the same \`output_ids\` as healthy rank 1 for an identical deterministic request."
@@ -394,6 +409,17 @@ write_summary() {
       echo '```'
     fi
   } >"$EVIDENCE_DIR/SUMMARY.md"
+}
+
+rank1_proof_value() {
+  local field="$1" proof="$EVIDENCE_DIR/rank1-output-parity-proof.json"
+  if [[ -s "$proof" ]]; then
+    jq -r --arg field "$field" \
+      'if has($field) and .[$field] != null then .[$field] else "unavailable" end' \
+      "$proof" 2>/dev/null || printf 'unavailable\n'
+  else
+    printf 'unavailable\n'
+  fi
 }
 
 collect_evidence() {
@@ -1307,11 +1333,13 @@ wait_for_initial_server() {
 
 generate() {
   local label="$1" routed_rank="${2:-0}"
+  local request_file="$EVIDENCE_DIR/${label}-request.json"
   local payload='{"text":"The capital of France is","sampling_params":{"max_new_tokens":4,"temperature":0.0}}'
   payload="$(printf '%s' "$payload" | jq --argjson rank "$routed_rank" '. + {routed_dp_rank:$rank}')"
+  printf '%s\n' "$payload" | jq -S . >"$request_file"
   curl -fsS --max-time 120 \
     -H 'Content-Type: application/json' \
-    -d "$payload" \
+    --data-binary "@$request_file" \
     "http://127.0.0.1:${LOCAL_PORT}/generate" \
     | tee "$EVIDENCE_DIR/${label}.json" \
     | jq -e --argjson routed_rank "$routed_rank" \
@@ -1472,40 +1500,84 @@ record_recovered_rank_inference_result() {
 capture_rank1_output_parity() {
   local healthy="$EVIDENCE_DIR/healthy-rank1.json"
   local recovered="$EVIDENCE_DIR/recovered-rank1.json"
-  local healthy_sha256 recovered_sha256 healthy_count recovered_count
-  local output_ids_equal=false
+  local healthy_request="$EVIDENCE_DIR/healthy-rank1-request.json"
+  local recovered_request="$EVIDENCE_DIR/recovered-rank1-request.json"
+  local healthy_sha256 recovered_sha256 healthy_request_sha256 recovered_request_sha256
+  local healthy_count recovered_count healthy_completion_tokens recovered_completion_tokens
+  local healthy_finish_reason recovered_finish_reason
+  local healthy_weight_version recovered_weight_version
+  local healthy_num_retractions recovered_num_retractions
+  local requests_equal=false output_ids_equal=false
 
-  [[ -s "$healthy" && -s "$recovered" ]] || return 1
+  [[ -s "$healthy" && -s "$recovered" && \
+     -s "$healthy_request" && -s "$recovered_request" ]] || return 1
+  healthy_request_sha256="$(sha256sum "$healthy_request" | cut -d' ' -f1)"
+  recovered_request_sha256="$(sha256sum "$recovered_request" | cut -d' ' -f1)"
+  if cmp -s "$healthy_request" "$recovered_request"; then
+    requests_equal=true
+  fi
   healthy_sha256="$(jq -c '.output_ids' "$healthy" | sha256sum | cut -d' ' -f1)"
   recovered_sha256="$(jq -c '.output_ids' "$recovered" | sha256sum | cut -d' ' -f1)"
   healthy_count="$(jq '.output_ids | length' "$healthy")"
   recovered_count="$(jq '.output_ids | length' "$recovered")"
+  healthy_completion_tokens="$(jq '.meta_info.completion_tokens // (.output_ids | length)' "$healthy")"
+  recovered_completion_tokens="$(jq '.meta_info.completion_tokens // (.output_ids | length)' "$recovered")"
+  healthy_finish_reason="$(jq -r '.meta_info.finish_reason.type // .meta_info.finish_reason // "unknown"' "$healthy")"
+  recovered_finish_reason="$(jq -r '.meta_info.finish_reason.type // .meta_info.finish_reason // "unknown"' "$recovered")"
+  healthy_weight_version="$(jq -r '.meta_info.weight_version // "unknown"' "$healthy")"
+  recovered_weight_version="$(jq -r '.meta_info.weight_version // "unknown"' "$recovered")"
+  healthy_num_retractions="$(jq '.meta_info.num_retractions // 0' "$healthy")"
+  recovered_num_retractions="$(jq '.meta_info.num_retractions // 0' "$recovered")"
   if jq -e -n \
     --slurpfile healthy "$healthy" \
     --slurpfile recovered "$recovered" \
     '$healthy[0].output_ids == $recovered[0].output_ids' >/dev/null; then
     output_ids_equal=true
+  fi
+  if [[ "$requests_equal" == true && "$output_ids_equal" == true ]]; then
     RANK1_OUTPUT_PARITY=true
   fi
 
   jq -n \
+    --argjson requests_equal "$requests_equal" \
     --argjson output_ids_equal "$output_ids_equal" \
     --argjson healthy_dp_rank "$(jq '.meta_info.dp_rank' "$healthy")" \
     --argjson recovered_dp_rank "$(jq '.meta_info.dp_rank' "$recovered")" \
     --argjson healthy_token_count "$healthy_count" \
     --argjson recovered_token_count "$recovered_count" \
+    --argjson healthy_completion_tokens "$healthy_completion_tokens" \
+    --argjson recovered_completion_tokens "$recovered_completion_tokens" \
+    --argjson healthy_num_retractions "$healthy_num_retractions" \
+    --argjson recovered_num_retractions "$recovered_num_retractions" \
+    --arg healthy_finish_reason "$healthy_finish_reason" \
+    --arg recovered_finish_reason "$recovered_finish_reason" \
+    --arg healthy_weight_version "$healthy_weight_version" \
+    --arg recovered_weight_version "$recovered_weight_version" \
+    --arg healthy_request_sha256 "$healthy_request_sha256" \
+    --arg recovered_request_sha256 "$recovered_request_sha256" \
     --arg healthy_output_ids_sha256 "$healthy_sha256" \
     --arg recovered_output_ids_sha256 "$recovered_sha256" \
-    '{output_ids_equal:$output_ids_equal,
+    '{requests_equal:$requests_equal,
+      output_ids_equal:$output_ids_equal,
       healthy_dp_rank:$healthy_dp_rank,
       recovered_dp_rank:$recovered_dp_rank,
       healthy_token_count:$healthy_token_count,
       recovered_token_count:$recovered_token_count,
+      healthy_completion_tokens:$healthy_completion_tokens,
+      recovered_completion_tokens:$recovered_completion_tokens,
+      healthy_finish_reason:$healthy_finish_reason,
+      recovered_finish_reason:$recovered_finish_reason,
+      healthy_weight_version:$healthy_weight_version,
+      recovered_weight_version:$recovered_weight_version,
+      healthy_num_retractions:$healthy_num_retractions,
+      recovered_num_retractions:$recovered_num_retractions,
+      healthy_request_sha256:$healthy_request_sha256,
+      recovered_request_sha256:$recovered_request_sha256,
       healthy_output_ids_sha256:$healthy_output_ids_sha256,
       recovered_output_ids_sha256:$recovered_output_ids_sha256}' \
     >"$EVIDENCE_DIR/rank1-output-parity-proof.json"
 
-  [[ "$output_ids_equal" == true ]]
+  [[ "$requests_equal" == true && "$output_ids_equal" == true ]]
 }
 
 collect_post_recovery_evidence() {

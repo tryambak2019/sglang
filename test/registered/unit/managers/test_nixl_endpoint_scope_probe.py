@@ -16,7 +16,9 @@ register_cpu_ci(est_time=2, suite="base-a-test-cpu")
 
 
 class TestNixlEndpointScopeProbe(unittest.TestCase):
-    def _run_parity_probe(self, healthy_output_ids, recovered_output_ids):
+    def _run_parity_probe(
+        self, healthy_output_ids, recovered_output_ids, recovered_request_rank=1
+    ):
         script = (
             Path(__file__).resolve().parents[4]
             / "validation"
@@ -26,13 +28,46 @@ class TestNixlEndpointScopeProbe(unittest.TestCase):
             evidence = Path(evidence_dir)
             (evidence / "healthy-rank1.json").write_text(
                 json.dumps(
-                    {"output_ids": healthy_output_ids, "meta_info": {"dp_rank": 1}}
+                    {
+                        "output_ids": healthy_output_ids,
+                        "meta_info": {
+                            "dp_rank": 1,
+                            "completion_tokens": len(healthy_output_ids),
+                            "finish_reason": {"type": "length", "length": 4},
+                            "weight_version": "default",
+                            "num_retractions": 0,
+                        },
+                    }
                 )
             )
             (evidence / "recovered-rank1.json").write_text(
                 json.dumps(
-                    {"output_ids": recovered_output_ids, "meta_info": {"dp_rank": 1}}
+                    {
+                        "output_ids": recovered_output_ids,
+                        "meta_info": {
+                            "dp_rank": 1,
+                            "completion_tokens": len(recovered_output_ids),
+                            "finish_reason": {"type": "length", "length": 4},
+                            "weight_version": "default",
+                            "num_retractions": 0,
+                        },
+                    }
                 )
+            )
+            healthy_request = {
+                "routed_dp_rank": 1,
+                "sampling_params": {"max_new_tokens": 4, "temperature": 0.0},
+                "text": "The capital of France is",
+            }
+            recovered_request = {
+                **healthy_request,
+                "routed_dp_rank": recovered_request_rank,
+            }
+            (evidence / "healthy-rank1-request.json").write_text(
+                json.dumps(healthy_request, sort_keys=True, indent=2) + "\n"
+            )
+            (evidence / "recovered-rank1-request.json").write_text(
+                json.dumps(recovered_request, sort_keys=True, indent=2) + "\n"
             )
             env = os.environ.copy()
             env["EVIDENCE_DIR"] = evidence_dir
@@ -47,6 +82,9 @@ if capture_rank1_output_parity; then
 else
   parity_rc=$?
 fi
+VERDICT=YES
+VERDICT_REASON=test
+write_summary 0
 printf '%s %s\n' "$parity_rc" "$RANK1_OUTPUT_PARITY"
 """,
                     "bash",
@@ -60,7 +98,8 @@ printf '%s %s\n' "$parity_rc" "$RANK1_OUTPUT_PARITY"
             proof = json.loads(
                 (evidence / "rank1-output-parity-proof.json").read_text()
             )
-        return result, proof
+            summary = (evidence / "SUMMARY.md").read_text()
+        return result, proof, summary
 
     def test_probe_uses_durable_markers_after_endpoint_cleanup(self):
         store = dist.TCPStore(
@@ -172,19 +211,27 @@ fi
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_rank1_output_parity_accepts_identical_output_ids(self):
-        result, proof = self._run_parity_probe(
+        result, proof, summary = self._run_parity_probe(
             [12095, 13, 99487, 11652], [12095, 13, 99487, 11652]
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "0 true")
+        self.assertTrue(proof["requests_equal"])
         self.assertTrue(proof["output_ids_equal"])
         self.assertEqual(
             proof["healthy_output_ids_sha256"], proof["recovered_output_ids_sha256"]
         )
+        self.assertIn("## Rank-1 inference proof", summary)
+        self.assertIn("Healthy/recovered completion tokens: `4 / 4`", summary)
+        self.assertIn("Healthy/recovered finish reason: `length / length`", summary)
+        self.assertIn("Healthy/recovered weight version: `default / default`", summary)
+        self.assertIn("Healthy/recovered retractions: `0 / 0`", summary)
+        self.assertNotIn("Paris", summary)
+        self.assertNotIn("12095", summary)
 
     def test_rank1_output_parity_rejects_different_output_ids(self):
-        result, proof = self._run_parity_probe(
+        result, proof, _ = self._run_parity_probe(
             [12095, 13, 99487, 11652], [2130, 624, 61117, 198]
         )
 
@@ -193,6 +240,21 @@ fi
         self.assertFalse(proof["output_ids_equal"])
         self.assertNotEqual(
             proof["healthy_output_ids_sha256"], proof["recovered_output_ids_sha256"]
+        )
+
+    def test_rank1_output_parity_rejects_different_requests(self):
+        result, proof, _ = self._run_parity_probe(
+            [12095, 13, 99487, 11652],
+            [12095, 13, 99487, 11652],
+            recovered_request_rank=0,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "1 false")
+        self.assertFalse(proof["requests_equal"])
+        self.assertTrue(proof["output_ids_equal"])
+        self.assertNotEqual(
+            proof["healthy_request_sha256"], proof["recovered_request_sha256"]
         )
 
 
