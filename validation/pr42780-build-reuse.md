@@ -27,7 +27,15 @@
 
 ### Post-build record
 
-- Pending.
+- Workflow run: `39815272861`
+- Validation commit: `bee69dd7ce0b975fe188684a029a53a1b7d4e524`
+- Result: success in 13m34s.
+- Build index digest: `sha256:d1b22b69fe4e6dcb42c53ca4be4d80a1dd0bbee3050cfc1bd74c1770c3429216`
+- Runnable Linux AMD64 digest: `sha256:95ae1606f049770da3e44895f6be347d0bcb0226cde9c2b5f769c4e3175c960f`
+- Attestation manifest: `sha256:508d277643c452232896864e25a4d3cf7b0812e3c818f95d800d27ababdf11ba`
+- Published image labels record PR revision `31a9275785295336a36961604772deccdd92a982`, reused runtime digest `sha256:d62346c2b91b261398c0fb203d72f97186477c03dbf6ed6eba5746630813ae78`, Mooncake commit `1c54e233a22404692efd312739db749991d8d757`, CUDA architecture `100`, TreeCore artifact `21f2f46c2cf958139b6ea52746da84bfb43cd535850a9073336cf773aa3f981c`, and native-input digest `be7b35636f853e8917c2c5185bc04b6737d1d84c1b3eaddc6c4be84d6cda93f1`.
+- The BuildKit graph selected `runtime-reuse-mooncake-and-treecore`; neither `pr-rust-builder` nor `mooncake-builder` executed. The reused production TreeCore loaded from the embedded PR source with `SGLANG_RUST_BUILD_MODE=never`.
+- SBOM/attestation export dominated the final stage; layer pushes took 3.4s and 0.6s.
 
 ## Pre-build classification for `516b449c4a6a2f5e7a1099ada6207ad4347be909`
 
