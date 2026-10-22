@@ -76,7 +76,7 @@
 set -Eeuo pipefail
 
 readonly PR_NUMBER="42780"
-readonly EXPECTED_PR_SHA="06d70f151668a69af64c2e6f2004ed8aa7d062fd"
+readonly EXPECTED_PR_SHA="516b449c4a6a2f5e7a1099ada6207ad4347be909"
 readonly APP="sglang-nixl-recovery"
 readonly OFFICIAL_BASE_IMAGE_DIGEST="sha256:e20a28a4badee7d3de71881e7c2c160c7079465bf1ac21edec31a99c2602507d"
 readonly EXPECTED_BASE_COMMIT="e6072935bfa1036d4e20e8ed042ce1ff09872f57"
@@ -1498,6 +1498,64 @@ wait_for_recovery_observation() {
   die "membership observation did not reach awaiting_recovery within ${RECOVERY_TIMEOUT_SECONDS}s"
 }
 
+submit_recovery_attempt() {
+  local attempt="$1"
+  local prefix="$EVIDENCE_DIR/recovery-submit-attempt-${attempt}"
+  local meta_file="${prefix}.meta"
+  local curl_rc
+
+  set +e
+  curl -sS --max-time 60 \
+    -o "${prefix}.json" \
+    -w '%{http_code}\n%{time_total}\n' \
+    -H 'Content-Type: application/json' \
+    --data-binary "@$EVIDENCE_DIR/recovery-request.json" \
+    "http://127.0.0.1:${LOCAL_PORT}/recover_elastic_ep" \
+    >"$meta_file" 2>"${prefix}.stderr"
+  curl_rc=$?
+  set -e
+
+  sed -n '1p' "$meta_file" >"${prefix}.status"
+  sed -n '2p' "$meta_file" >"${prefix}.elapsed-seconds"
+  printf '%s\n' "$curl_rc" >"${prefix}.curl-exit-code"
+}
+
+state_matches_recovery_request() {
+  local state_file="$1"
+  jq -e \
+    --arg op "$OPERATION_ID" \
+    --arg alloc "$REPLACEMENT_ALLOCATION_ID" \
+    --arg incarnation "$FAILED_POD_UID" \
+    '.recovery_operation_id == $op and
+     .recovery_allocation_id == $alloc and
+     .recovery_topology_generation == 0 and
+     .recovery_rank_offset == 1 and
+     .recovery_failed_allocation_incarnation == $incarnation' \
+    "$state_file" >/dev/null
+}
+
+recovery_response_is_authorized() {
+  local response_file="$1"
+  jq -e \
+    --arg op "$OPERATION_ID" \
+    '.operation_id == $op and
+     (.recovery_phase == "restoring" or
+      .recovery_phase == "slot_restored" or
+      .recovery_phase == "warming_up" or
+      .recovery_phase == "ready")' \
+    "$response_file" >/dev/null
+}
+
+recovery_state_is_authorized() {
+  local state_file="$1"
+  state_matches_recovery_request "$state_file" && jq -e \
+    '(.recovery_phase == "restoring" or
+      .recovery_phase == "slot_restored" or
+      .recovery_phase == "warming_up" or
+      .recovery_phase == "ready")' \
+    "$state_file" >/dev/null
+}
+
 main() {
   if ! mkdir -p "$EVIDENCE_DIR"; then
     printf 'FAILURE: cannot create evidence directory: %s\n' "$EVIDENCE_DIR" >&2
@@ -1673,17 +1731,59 @@ EOF
   wait_for_recovery_observation "$runtime_instance_id"
 
   note "Authorizing fixed-slot recovery operation $OPERATION_ID"
-  curl -fsS --max-time 60 \
-    -H 'Content-Type: application/json' \
-    -d "$(jq -nc \
-      --arg op "$OPERATION_ID" \
-      --arg alloc "$REPLACEMENT_ALLOCATION_ID" \
-      --arg incarnation "$FAILED_POD_UID" \
-      '{operation_id:$op,topology_generation:0,allocation_id:$alloc,rank_offset:1,
-        failed_allocation_incarnation:$incarnation}')" \
-    "http://127.0.0.1:${LOCAL_PORT}/recover_elastic_ep" \
-    | tee "$EVIDENCE_DIR/recovery-submit.json" | jq -e \
-      --arg op "$OPERATION_ID" '.operation_id == $op and .recovery_phase == "restoring"' >/dev/null
+  jq -nc \
+    --arg op "$OPERATION_ID" \
+    --arg alloc "$REPLACEMENT_ALLOCATION_ID" \
+    --arg incarnation "$FAILED_POD_UID" \
+    '{operation_id:$op,topology_generation:0,allocation_id:$alloc,rank_offset:1,
+      failed_allocation_incarnation:$incarnation}' \
+    >"$EVIDENCE_DIR/recovery-request.json"
+
+  submit_recovery_attempt 1
+  get_state >"$EVIDENCE_DIR/recovery-state-after-attempt-1.json"
+  local attempt_1_status attempt_1_curl_rc recovery_authorized=false
+  attempt_1_status="$(cat "$EVIDENCE_DIR/recovery-submit-attempt-1.status")"
+  attempt_1_curl_rc="$(cat "$EVIDENCE_DIR/recovery-submit-attempt-1.curl-exit-code")"
+
+  if [[ "$attempt_1_curl_rc" -eq 0 && "$attempt_1_status" =~ ^2[0-9][0-9]$ ]]; then
+    recovery_response_is_authorized \
+      "$EVIDENCE_DIR/recovery-submit-attempt-1.json" || \
+      die "recovery attempt 1 returned an uncorrelated success response"
+    recovery_authorized=true
+    cp "$EVIDENCE_DIR/recovery-submit-attempt-1.json" \
+      "$EVIDENCE_DIR/recovery-submit.json"
+  elif recovery_state_is_authorized \
+    "$EVIDENCE_DIR/recovery-state-after-attempt-1.json"; then
+    note "Recovery attempt 1 response was not successful, but exact state proves the operation was already authorized"
+    recovery_authorized=true
+  elif state_matches_recovery_request \
+    "$EVIDENCE_DIR/recovery-state-after-attempt-1.json" && \
+    jq -e '.recovery_phase == "submission_unknown"' \
+      "$EVIDENCE_DIR/recovery-state-after-attempt-1.json" >/dev/null; then
+    note "Recovery attempt 1 is submission_unknown; reconciling once with the identical request body"
+    submit_recovery_attempt 2
+    get_state >"$EVIDENCE_DIR/recovery-state-after-attempt-2.json"
+    local attempt_2_status attempt_2_curl_rc
+    attempt_2_status="$(cat "$EVIDENCE_DIR/recovery-submit-attempt-2.status")"
+    attempt_2_curl_rc="$(cat "$EVIDENCE_DIR/recovery-submit-attempt-2.curl-exit-code")"
+    [[ "$attempt_2_curl_rc" -eq 0 ]] || \
+      die "recovery reconciliation transport failed (curl exit $attempt_2_curl_rc)"
+    [[ "$attempt_2_status" =~ ^2[0-9][0-9]$ ]] || \
+      die "recovery reconciliation returned HTTP $attempt_2_status"
+    recovery_response_is_authorized \
+      "$EVIDENCE_DIR/recovery-submit-attempt-2.json" || \
+      die "recovery attempt 2 returned an uncorrelated success response"
+    state_matches_recovery_request \
+      "$EVIDENCE_DIR/recovery-state-after-attempt-2.json" || \
+      die "recovery attempt 2 state does not match the original fenced operation"
+    recovery_authorized=true
+    cp "$EVIDENCE_DIR/recovery-submit-attempt-2.json" \
+      "$EVIDENCE_DIR/recovery-submit.json"
+  else
+    die "recovery attempt 1 was not successful and exact state is not eligible for same-identity reconciliation"
+  fi
+  [[ "$recovery_authorized" == true ]] || \
+    die "recovery authorization was not established"
   mark_stage recovery-authorized complete
 
   publish_stale_endpoint "$runtime_instance_id"

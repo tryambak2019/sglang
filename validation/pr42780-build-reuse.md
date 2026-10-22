@@ -1,43 +1,38 @@
 # PR 42780 build-reuse record
 
-## Pre-build classification for `06d70f151668a69af64c2e6f2004ed8aa7d062fd`
+## Pre-build classification for `516b449c4a6a2f5e7a1099ada6207ad4347be909`
 
-- Previous candidate source: `6c40dbfec2103245abbab0721265efa747ed72c5`
-- Candidate source: `06d70f151668a69af64c2e6f2004ed8aa7d062fd`
+- Previous candidate source: `06d70f151668a69af64c2e6f2004ed8aa7d062fd`
+- Candidate source: `516b449c4a6a2f5e7a1099ada6207ad4347be909`
 - Target: Linux AMD64, B200/SM100, CUDA architecture `100-real`
-- Full changed-path command: `git diff --name-only 6c40dbfec2103245abbab0721265efa747ed72c5..06d70f151668a69af64c2e6f2004ed8aa7d062fd`
-- Full changed-path result: 7 paths; SHA-256 `5087b14e6965219d3a979fe1a7afa84608184980da446035ce13e51e72817f81`
-- Whitespace-only equivalence: false (`git diff -w --quiet` exited 1)
-- Candidate archive SHA-256: `e4539319c79185cafa2e454c63a0e72db7d48b4702cd8205ac00106171e32393`
+- Full changed-path command: `git diff --name-only 06d70f151668a69af64c2e6f2004ed8aa7d062fd..516b449c4a6a2f5e7a1099ada6207ad4347be909`
+- Full changed-path result: 309 paths; SHA-256 `182afacd851100092ac6781b4d1ccf222eb372deba285e45901c565afdcf53b7`
+- Whitespace-only equivalence: false
+- Candidate archive SHA-256: `be59809480b0c83b17e2b915731c35fdceb483c10b6f1de793505b6240ef8ba0`
 
 | Classification | Value | Evidence |
 | --- | --- | --- |
 | `mooncake_inputs_changed` | `false` | Mooncake commit, SM100 patch, CUDA architecture, base-image digest, Torch/CUDA ABI, builder commands, and PG inputs are unchanged. |
-| `native_inputs_changed` | `false` | A path-limited `git diff --quiet` over every input declared in `pr42780-native-inputs.txt` exited 0. The prior artifact records native-input digest `05e71eb6f5bac4e9103172f93ba8cfe676ab5a74ea5cbee16910936f1fbb4c9b`. |
-| `python_behavior_changed` | `true` | The candidate adds a bounded membership deadline, correlated rejection before expired mutation, and delayed-acknowledgement regressions. |
-| `formatting_only` | `false` | The candidate contains behavioral changes and is not whitespace-equivalent. |
+| `native_inputs_changed` | `true` | The exact path-limited comparison over `pr42780-native-inputs.txt` found `python/pyproject.toml` changed after rebasing onto current upstream `main`. Reusing the prior TreeCore artifact is therefore prohibited. |
+| `python_behavior_changed` | `true` | The candidate adds correlated recovery-hop diagnostics, structured recovery timeout handling, and same-operation reconciliation regressions. |
+| `formatting_only` | `false` | The candidate contains behavioral and upstream changes and is not whitespace-equivalent. |
 
 ### Selected reuse path
 
-- Reuse immutable runtime `ghcr.io/tryambak2019/sglang-pr42780-recovery@sha256:6b3447e447aa26dc4c2caa309ef47ad03507b6cd9a694ccb171fb34b82c815a5`.
-- That runtime contains Mooncake commit `1c54e233a22404692efd312739db749991d8d757` and TreeCore artifact `21f2f46c2cf958139b6ea52746da84bfb43cd535850a9073336cf773aa3f981c`, produced from source `6c40dbfec2103245abbab0721265efa747ed72c5` and native-input digest `05e71eb6f5bac4e9103172f93ba8cfe676ab5a74ea5cbee16910936f1fbb4c9b`.
-- Select `runtime-reuse-mooncake-and-treecore`. Neither `mooncake-builder` nor `pr-rust-builder` is in its dependency graph.
-- Delete the reused runtime's old `/opt/pr-source` before copying the complete candidate archive. Copy back only the verified TreeCore shared object and its build metadata from the immutable runtime.
-- Do not use a GHA cache on this Python-only path. The immutable GHCR runtime is the cache boundary, and cache export was the previous run's dominant cost.
-- Remove disk reclamation for this lightweight path. The measured prior run proved the reused runtime pull took only about 17 seconds and the selected graph no longer needs compiler or Mooncake build scratch space.
+- Reuse immutable Mooncake runtime `ghcr.io/tryambak2019/sglang-pr42780-recovery@sha256:61125246daa7194fa993b631a5012d61d7c4c79befc85f1e4e2311b57ff236a3`.
+- Select `runtime-reuse-mooncake`: Mooncake is outside the dependency graph, while `pr-rust-builder` rebuilds TreeCore from the candidate's declared native inputs.
+- Record the new TreeCore artifact digest, native-input digest, and producing commit in the image itself through `build-metadata.env`.
+- Do not select `runtime-reuse-mooncake-and-treecore`; the changed `python/pyproject.toml` makes that path invalid for this head.
+- Do not use a GHA cache. The immutable GHCR Mooncake runtime is the cache boundary, avoiding both the hour-scale Mooncake compile and the previously dominant `mode=max` cache export.
+- Do not run disk reclamation. The selected graph needs only the TreeCore toolchain/build scratch space and the final Python overlay.
 
-### Prior measured run `39662991959`
+### Most recent Python-only build `39695859298`
 
-- Validation commit: `db68e149056dd4ad746b775af02cbc2f8ccbbf69`
-- Build index digest: `sha256:4ce3347dc40b5fabbd6a5c89e5eed20ede8fac0fb231865e59a05c4e750f729c`
-- Runnable AMD64 digest: `sha256:6b3447e447aa26dc4c2caa309ef47ad03507b6cd9a694ccb171fb34b82c815a5`
-- Disk reclamation: 4m15s.
-- TreeCore compile: 82.7s.
-- Reused runtime pull: about 17s.
-- Build/push action: 39m04s.
-- GHA `mode=max` cache export: 1,524.4s (25m24s), the dominant remaining cost.
-- Total job: about 44m38s. This did not meet the intended small-overlay build time, so the next path removes both the Rust build and GHA cache export.
+- Runnable AMD64 digest: `sha256:fec92c82f5d48fc6fedf69c487b5194c9d54a668d7be445448ea6bd8821c605e`
+- Build index digest: `sha256:3fec3a01da847941d42890d446db44774d8c1c15dfbfe45f2883fb86c79f3285`
+- Total duration: about 15m27s.
+- That build reused both Mooncake and TreeCore because its native inputs were unchanged. The present build must additionally compile TreeCore, whose prior measured compile took about 83 seconds.
 
 ## Post-build record
 
-Pending workflow completion. Record the workflow SHA, index and AMD64 digests, reused runtime digest, candidate PR SHA, Mooncake commit, TreeCore artifact/input digests and producing SHA, observed registry transfer/export duration, total build duration, and any divergence from the plan above.
+Pending workflow completion. Record the workflow SHA, index and AMD64 digests, reused Mooncake digest, candidate PR SHA, new TreeCore artifact/input digests, observed registry transfer/export duration, total build duration, and any divergence from the plan above.

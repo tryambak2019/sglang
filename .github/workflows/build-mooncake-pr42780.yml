@@ -22,7 +22,7 @@ concurrency:
 
 env:
   IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/sglang-pr42780-recovery
-  IMAGE_TAG: pr42780-06d70f1-mooncake-1c54e233-sm100
+  IMAGE_TAG: pr42780-516b449-mooncake-1c54e233-sm100
 
 jobs:
   build:
@@ -50,7 +50,7 @@ jobs:
         with:
           context: .
           file: validation/mooncake-pr42780.Dockerfile
-          target: runtime-reuse-mooncake-and-treecore
+          target: runtime-reuse-mooncake
           platforms: linux/amd64
           push: true
           tags: |
@@ -59,13 +59,11 @@ jobs:
           provenance: mode=max
           sbom: true
           build-args: |
-            REUSED_RUNTIME_IMAGE=ghcr.io/tryambak2019/sglang-pr42780-recovery@sha256:6b3447e447aa26dc4c2caa309ef47ad03507b6cd9a694ccb171fb34b82c815a5
-            REUSED_RUNTIME_IMAGE_DIGEST=sha256:6b3447e447aa26dc4c2caa309ef47ad03507b6cd9a694ccb171fb34b82c815a5
-            SGLANG_PR_COMMIT=06d70f151668a69af64c2e6f2004ed8aa7d062fd
-            SGLANG_PR_ARCHIVE_SHA256=e4539319c79185cafa2e454c63a0e72db7d48b4702cd8205ac00106171e32393
-            NATIVE_ARTIFACT_SOURCE_COMMIT=6c40dbfec2103245abbab0721265efa747ed72c5
-            NATIVE_ARTIFACT_SHA256=21f2f46c2cf958139b6ea52746da84bfb43cd535850a9073336cf773aa3f981c
-            NATIVE_INPUTS_SHA256=05e71eb6f5bac4e9103172f93ba8cfe676ab5a74ea5cbee16910936f1fbb4c9b
+            REUSED_MOONCAKE_IMAGE=ghcr.io/tryambak2019/sglang-pr42780-recovery@sha256:61125246daa7194fa993b631a5012d61d7c4c79befc85f1e4e2311b57ff236a3
+            REUSED_MOONCAKE_IMAGE_DIGEST=sha256:61125246daa7194fa993b631a5012d61d7c4c79befc85f1e4e2311b57ff236a3
+            SGLANG_PR_COMMIT=516b449c4a6a2f5e7a1099ada6207ad4347be909
+            SGLANG_PR_ARCHIVE_SHA256=be59809480b0c83b17e2b915731c35fdceb483c10b6f1de793505b6240ef8ba0
+            NATIVE_ARTIFACT_SOURCE_COMMIT=516b449c4a6a2f5e7a1099ada6207ad4347be909
 
       - name: Resolve the runnable amd64 manifest digest
         id: digest
@@ -99,12 +97,9 @@ jobs:
             echo '```'
             echo
             echo "Build index digest: \`${INDEX_DIGEST}\`"
-            echo "Reused Mooncake and TreeCore runtime: \`ghcr.io/tryambak2019/sglang-pr42780-recovery@sha256:6b3447e447aa26dc4c2caa309ef47ad03507b6cd9a694ccb171fb34b82c815a5\`"
+            echo "Reused Mooncake runtime: \`ghcr.io/tryambak2019/sglang-pr42780-recovery@sha256:61125246daa7194fa993b631a5012d61d7c4c79befc85f1e4e2311b57ff236a3\`"
             echo "Mooncake commit: \`1c54e233a22404692efd312739db749991d8d757\`"
-            echo "PR commit: \`06d70f151668a69af64c2e6f2004ed8aa7d062fd\`"
-            echo "TreeCore producing commit: \`6c40dbfec2103245abbab0721265efa747ed72c5\`"
-            echo "TreeCore artifact digest: \`21f2f46c2cf958139b6ea52746da84bfb43cd535850a9073336cf773aa3f981c\`"
-            echo "TreeCore native-input digest: \`05e71eb6f5bac4e9103172f93ba8cfe676ab5a74ea5cbee16910936f1fbb4c9b\`"
+            echo "PR commit and TreeCore producing commit: \`516b449c4a6a2f5e7a1099ada6207ad4347be909\`"
             echo "Mooncake CUDA architecture: \`100-real\`"
             echo "SGLang base digest: \`sha256:e20a28a4badee7d3de71881e7c2c160c7079465bf1ac21edec31a99c2602507d\`"
           } >> "$GITHUB_STEP_SUMMARY"
