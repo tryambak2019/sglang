@@ -1,5 +1,31 @@
 # PR 42780 build-reuse record
 
+## Pre-build classification for `b3212cb158a0ceee851b70e13e0e1dbe5e11cd8a`
+
+- Previous candidate source: `e658396f16f112cfd5daeea3a3fd444335930a62`
+- Candidate source: `b3212cb158a0ceee851b70e13e0e1dbe5e11cd8a`
+- Rebased upstream source: `c394a90c2b4d82483ed908d2afbca1901d9d59d2`
+- Target: Linux AMD64, B200/SM100, CUDA architecture `100-real`
+- Full changed-path command: `git diff --name-only e658396f16f112cfd5daeea3a3fd444335930a62..b3212cb158a0ceee851b70e13e0e1dbe5e11cd8a`
+- Full changed-path result: 206 paths; SHA-256 `13d470c61a14beaa41e61ea37fd7ebb127e9378bbc8410967eb18b0bd52c1a0e`
+- Whitespace-only equivalence: false
+- Candidate archive SHA-256: `4e729d2f91dccb7113aad5165fce99967cd12f055a7adce0f9ef12f084894d49`
+
+| Classification | Value | Evidence |
+| --- | --- | --- |
+| `mooncake_inputs_changed` | `false` | Mooncake commit, SM100 patch, CUDA architecture, base-image digest, Torch/CUDA ABI, builder commands, and PG inputs are unchanged. |
+| `native_inputs_changed` | `true` | The exact path-limited comparison over `pr42780-native-inputs.txt` found `rust/sglang-radix-tree/src/python_bindings.rs` and `rust/sglang-radix-tree/src/unified_tree_core.rs` changed after rebasing onto current upstream `main`. |
+| `python_behavior_changed` | `true` | The candidate includes the rebased upstream Python source in addition to the fixed-slot recovery implementation. |
+| `formatting_only` | `false` | The candidate contains upstream behavioral and native-source changes and is not whitespace-equivalent. |
+
+### Selected reuse path
+
+- Reuse immutable Mooncake runtime `ghcr.io/tryambak2019/sglang-pr42780-recovery@sha256:61125246daa7194fa993b631a5012d61d7c4c79befc85f1e4e2311b57ff236a3`.
+- Select `runtime-reuse-mooncake`: Mooncake is outside the dependency graph, while `pr-rust-builder` rebuilds TreeCore from the candidate's declared native inputs.
+- Do not select `runtime-reuse-mooncake-and-treecore`; the two changed Rust inputs prohibit reuse of the prior TreeCore artifact.
+- Do not use a GHA cache or run disk reclamation. The immutable GHCR Mooncake runtime is the cache boundary.
+- Expected duration is about 16 minutes based on the prior TreeCore-rebuild run, dominated by SBOM, attestation, and OCI export rather than native compilation.
+
 ## Pre-build classification for `e658396f16f112cfd5daeea3a3fd444335930a62`
 
 - Previous candidate source: `1dfa54b0e895962f59211ba1842a64f968ef91f6`
