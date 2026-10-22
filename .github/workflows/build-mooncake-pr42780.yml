@@ -22,7 +22,7 @@ concurrency:
 
 env:
   IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/sglang-pr42780-recovery
-  IMAGE_TAG: pr42780-31a9275-mooncake-1c54e233-sm100
+  IMAGE_TAG: pr42780-1dfa54b-mooncake-1c54e233-sm100
 
 jobs:
   build:
@@ -59,10 +59,10 @@ jobs:
           provenance: mode=max
           sbom: true
           build-args: |
-            REUSED_RUNTIME_IMAGE=ghcr.io/tryambak2019/sglang-pr42780-recovery@sha256:d62346c2b91b261398c0fb203d72f97186477c03dbf6ed6eba5746630813ae78
-            REUSED_RUNTIME_IMAGE_DIGEST=sha256:d62346c2b91b261398c0fb203d72f97186477c03dbf6ed6eba5746630813ae78
-            SGLANG_PR_COMMIT=31a9275785295336a36961604772deccdd92a982
-            SGLANG_PR_ARCHIVE_SHA256=7c0bc56456fd6c144711f89d99db174c28d4d649a7bf0ef5b55efaf95eba7051
+            REUSED_RUNTIME_IMAGE=ghcr.io/tryambak2019/sglang-pr42780-recovery@sha256:95ae1606f049770da3e44895f6be347d0bcb0226cde9c2b5f769c4e3175c960f
+            REUSED_RUNTIME_IMAGE_DIGEST=sha256:95ae1606f049770da3e44895f6be347d0bcb0226cde9c2b5f769c4e3175c960f
+            SGLANG_PR_COMMIT=1dfa54b0e895962f59211ba1842a64f968ef91f6
+            SGLANG_PR_ARCHIVE_SHA256=f65a006582d900d6e95ed82aceae7b8a6af1dec7a85f0e9dacdcbbd2db5c7aa7
             NATIVE_ARTIFACT_SOURCE_COMMIT=516b449c4a6a2f5e7a1099ada6207ad4347be909
             NATIVE_ARTIFACT_SHA256=21f2f46c2cf958139b6ea52746da84bfb43cd535850a9073336cf773aa3f981c
             NATIVE_INPUTS_SHA256=be7b35636f853e8917c2c5185bc04b6737d1d84c1b3eaddc6c4be84d6cda93f1
@@ -99,9 +99,9 @@ jobs:
             echo '```'
             echo
             echo "Build index digest: \`${INDEX_DIGEST}\`"
-            echo "Reused full runtime: \`ghcr.io/tryambak2019/sglang-pr42780-recovery@sha256:d62346c2b91b261398c0fb203d72f97186477c03dbf6ed6eba5746630813ae78\`"
+            echo "Reused full runtime: \`ghcr.io/tryambak2019/sglang-pr42780-recovery@sha256:95ae1606f049770da3e44895f6be347d0bcb0226cde9c2b5f769c4e3175c960f\`"
             echo "Mooncake commit: \`1c54e233a22404692efd312739db749991d8d757\`"
-            echo "PR commit: \`31a9275785295336a36961604772deccdd92a982\`"
+            echo "PR commit: \`1dfa54b0e895962f59211ba1842a64f968ef91f6\`"
             echo "Reused TreeCore producing commit: \`516b449c4a6a2f5e7a1099ada6207ad4347be909\`"
             echo "Mooncake CUDA architecture: \`100-real\`"
             echo "SGLang base digest: \`sha256:e20a28a4badee7d3de71881e7c2c160c7079465bf1ac21edec31a99c2602507d\`"
