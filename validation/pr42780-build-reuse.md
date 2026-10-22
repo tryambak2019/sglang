@@ -1,5 +1,34 @@
 # PR 42780 build-reuse record
 
+## Pre-build classification for `e658396f16f112cfd5daeea3a3fd444335930a62`
+
+- Previous candidate source: `1dfa54b0e895962f59211ba1842a64f968ef91f6`
+- Candidate source: `e658396f16f112cfd5daeea3a3fd444335930a62`
+- Target: Linux AMD64, B200/SM100, CUDA architecture `100-real`
+- Full changed-path command: `git diff --name-only 1dfa54b0e895962f59211ba1842a64f968ef91f6..e658396f16f112cfd5daeea3a3fd444335930a62`
+- Full changed-path result: 11 paths; SHA-256 `bcc8024c14eb0f5925700d955aaccd465487ec90bdff7ee661883c37b215be43`
+- Whitespace-only equivalence: false
+- Candidate archive SHA-256: `89004aa2b1a8fd953e96e025b97851a6b104d4eae295f53d48a4f66e16c7f597`
+
+| Classification | Value | Evidence |
+| --- | --- | --- |
+| `mooncake_inputs_changed` | `false` | Mooncake commit, SM100 patch, CUDA architecture, base-image digest, Torch/CUDA ABI, builder commands, and PG inputs are unchanged. |
+| `native_inputs_changed` | `false` | The exact path-limited comparison over `pr42780-native-inputs.txt` returned no paths. |
+| `python_behavior_changed` | `true` | Recovery warmup now normalizes and verifies its internal sampling parameters before entering `ScheduleBatch`; the regression executes the previously crashing string-stop check. |
+| `formatting_only` | `false` | The candidate contains behavioral changes and is not whitespace-equivalent. |
+
+### Selected reuse path
+
+- Reuse immutable full runtime `ghcr.io/tryambak2019/sglang-pr42780-recovery@sha256:8b908926eb3d03ddfc25b9e9116555b6602fa4ee096a450bb00724917c677bee`.
+- Select `runtime-reuse-mooncake-and-treecore`; neither native build graph is reachable from this target.
+- Reuse TreeCore artifact `21f2f46c2cf958139b6ea52746da84bfb43cd535850a9073336cf773aa3f981c`, native-input digest `be7b35636f853e8917c2c5185bc04b6737d1d84c1b3eaddc6c4be84d6cda93f1`, produced by `516b449c4a6a2f5e7a1099ada6207ad4347be909`.
+- Do not run disk reclamation or export a GHA build cache. The immutable GHCR runtime remains the cache boundary.
+- Expected duration is about 15 minutes, dominated by source download, SBOM, attestation, and OCI export rather than compilation.
+
+### Post-build record
+
+- Pending.
+
 ## Pre-build classification for `1dfa54b0e895962f59211ba1842a64f968ef91f6`
 
 - Previous candidate source: `31a9275785295336a36961604772deccdd92a982`
