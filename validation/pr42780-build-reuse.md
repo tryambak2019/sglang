@@ -26,6 +26,22 @@
 - Do not use a GHA cache or run disk reclamation. The immutable GHCR Mooncake runtime is the cache boundary.
 - Expected duration is about 16 minutes based on the prior TreeCore-rebuild run, dominated by SBOM, attestation, and OCI export rather than native compilation.
 
+### Post-build record
+
+- Workflow run: `39867707808`
+- Validation commit: `7233712ca0dd12f5fbcd84fb85e5b6c392365f39`
+- Result: success in 15m42s; build/push step 14m49s.
+- Build index digest: `sha256:4aa11fe0390f8d4ee15e1cd05252ca0309eaa8ca264eae2ef7a56417c98cab66`
+- Runnable Linux AMD64 digest: `sha256:e1f6945ede6babf065aca93a7681ad8ddf077ccd56260671a98d318c7c53f2a6`
+- Attestation manifest: `sha256:57d02ca18fb698eb316df0b0a55d5078f7ef1d92b7905de069a5aade05cfd2cc`
+- Reused Mooncake digest: `sha256:61125246daa7194fa993b631a5012d61d7c4c79befc85f1e4e2311b57ff236a3`
+- Candidate PR and TreeCore producing commit: `b3212cb158a0ceee851b70e13e0e1dbe5e11cd8a`
+- New TreeCore native-input digest: `f8274f5de353c2439eeda44d9d0a41c384139d358faf160f0a2b6480a7c58b4d`
+- TreeCore artifact digest: `b377dfdf542d0d2a5a67876bf18db3af84fc61c683e533ffc72f270f7d319750`
+- TreeCore rebuilt in 126.6s and loaded from the embedded candidate source with `SGLANG_RUST_BUILD_MODE=never`.
+- The BuildKit graph selected `runtime-reuse-mooncake`; it contains `pr-rust-builder` and no `mooncake-builder` execution. There was no GHA cache export or disk reclamation.
+- Published image labels record the exact PR revision, reused Mooncake digest, Mooncake source revision `1c54e233a22404692efd312739db749991d8d757`, CUDA architecture `100`, and base digest `sha256:e20a28a4badee7d3de71881e7c2c160c7079465bf1ac21edec31a99c2602507d`.
+
 ## Pre-build classification for `e658396f16f112cfd5daeea3a3fd444335930a62`
 
 - Previous candidate source: `1dfa54b0e895962f59211ba1842a64f968ef91f6`
