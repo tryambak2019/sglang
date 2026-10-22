@@ -9,10 +9,14 @@ from urllib.parse import quote
 
 import torch.distributed as dist
 
+from sglang.test.ci.ci_register import register_cpu_ci
+
+register_cpu_ci(est_time=2, suite="base-a-test-cpu")
+
 
 class TestNixlEndpointScopeProbe(unittest.TestCase):
-    def setUp(self):
-        self.store = dist.TCPStore(
+    def test_probe_uses_durable_markers_after_endpoint_cleanup(self):
+        store = dist.TCPStore(
             "127.0.0.1",
             0,
             world_size=None,
@@ -20,8 +24,6 @@ class TestNixlEndpointScopeProbe(unittest.TestCase):
             wait_for_workers=False,
             timeout=timedelta(seconds=2),
         )
-
-    def test_probe_uses_durable_markers_after_endpoint_cleanup(self):
         runtime_instance_id = "runtime/1"
         operation_id = "recover/1"
         failed_allocation_id = "failed/1"
@@ -39,8 +41,8 @@ class TestNixlEndpointScopeProbe(unittest.TestCase):
             + f"{quote(operation_id, safe='')}/"
             + f"{quote(replacement_allocation_id, safe='')}/"
         )
-        stale_store = dist.PrefixStore(stale_prefix, self.store)
-        current_store = dist.PrefixStore(current_prefix, self.store)
+        stale_store = dist.PrefixStore(stale_prefix, store)
+        current_store = dist.PrefixStore(current_prefix, store)
 
         poison = b"stale-endpoint"
         stale_store.set("NIXL_EP/1", poison)
@@ -69,6 +71,18 @@ class TestNixlEndpointScopeProbe(unittest.TestCase):
             hashlib.sha256((stale_prefix + "NIXL_EP/1").encode()).hexdigest(),
             hashlib.sha256((current_prefix + "NIXL_EP/1").encode()).hexdigest(),
         )
+
+    def test_harness_uses_global_tcp_store_port_for_endpoint_probe(self):
+        script = (
+            Path(__file__).resolve().parents[4]
+            / "validation"
+            / "run_nixl_fixed_slot_recovery_k8s.sh"
+        ).read_text()
+
+        self.assertIn('SGLANG_TCP_STORE_PORT="${SGLANG_TCP_STORE_PORT:-29600}"', script)
+        self.assertIn('TCP_STORE_PORT="$SGLANG_TCP_STORE_PORT"', script)
+        self.assertIn('int(os.environ["TCP_STORE_PORT"])', script)
+        self.assertNotIn('dist.TCPStore("127.0.0.1", 26555', script)
 
     def test_inference_runs_when_scope_probe_fails(self):
         script = (

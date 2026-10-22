@@ -51,6 +51,7 @@
 #   UCX_TLS=                                  # required; cluster-specific comma-separated transports
 #   UCX_NET_DEVICES=                          # required; cluster-specific comma-separated device:port entries
 #   MOONCAKE_IB_DEVICE=                       # required; cluster-specific comma-separated device names
+#   SGLANG_TCP_STORE_PORT=29600               # global recovery/NIXL metadata store
 #   NODE_SELECTOR_KEY=                        # optional
 #   NODE_SELECTOR_VALUE=
 #   HF_TOKEN_SECRET_NAME=                     # secret key must be HF_TOKEN
@@ -93,6 +94,7 @@ RDMA_RESOURCE_COUNT="${RDMA_RESOURCE_COUNT:-1}"
 UCX_NET_DEVICES="${UCX_NET_DEVICES:-}"
 UCX_TLS="${UCX_TLS:-}"
 MOONCAKE_IB_DEVICE="${MOONCAKE_IB_DEVICE:-}"
+SGLANG_TCP_STORE_PORT="${SGLANG_TCP_STORE_PORT:-29600}"
 NODE_SELECTOR_KEY="${NODE_SELECTOR_KEY:-}"
 NODE_SELECTOR_VALUE="${NODE_SELECTOR_VALUE:-}"
 HF_TOKEN_SECRET_NAME="${HF_TOKEN_SECRET_NAME:-}"
@@ -410,6 +412,7 @@ collect_evidence() {
     echo "ucx_net_devices=$UCX_NET_DEVICES"
     echo "ucx_tls=$UCX_TLS"
     echo "mooncake_ib_device=$MOONCAKE_IB_DEVICE"
+    echo "sglang_tcp_store_port=$SGLANG_TCP_STORE_PORT"
     echo "expected_image_id=$EXPECTED_IMAGE_ID"
     echo "expected_base_image_digest=$EXPECTED_BASE_IMAGE_DIGEST"
     echo "expected_mooncake_commit=$EXPECTED_MOONCAKE_COMMIT"
@@ -885,6 +888,8 @@ ${allocation_index_arg}${mooncake_device_arg}            --cuda-graph-backend-pr
           value: "never"
         - name: SGLANG_NIXL_EP_BF16_DISPATCH
           value: "1"
+        - name: SGLANG_TCP_STORE_PORT
+          value: "${SGLANG_TCP_STORE_PORT}"
         - name: SGLANG_EXPECTED_PR_SHA
           value: "${EXPECTED_PR_SHA}"
         - name: NCCL_DEBUG
@@ -1317,12 +1322,13 @@ publish_stale_endpoint() {
   kube_with_timeout "$COMMAND_TIMEOUT_SECONDS" exec -n "$NAMESPACE" "$PRIMARY_POD" -- env \
     RUNTIME_INSTANCE_ID="$runtime_instance_id" \
     FAILED_ALLOCATION_ID="$FAILED_ALLOCATION_ID" \
+    TCP_STORE_PORT="$SGLANG_TCP_STORE_PORT" \
     python3 -c '
 import os
 from urllib.parse import quote
 import torch.distributed as dist
 
-store = dist.TCPStore("127.0.0.1", 26555, world_size=None,
+store = dist.TCPStore("127.0.0.1", int(os.environ["TCP_STORE_PORT"]), world_size=None,
                       is_master=False, wait_for_workers=False)
 prefix = (
     "elastic_ep/nixl_recovery/"
@@ -1343,6 +1349,7 @@ capture_endpoint_scope_proof() {
     FAILED_ALLOCATION_ID="$FAILED_ALLOCATION_ID" \
     OPERATION_ID="$OPERATION_ID" \
     REPLACEMENT_ALLOCATION_ID="$REPLACEMENT_ALLOCATION_ID" \
+    TCP_STORE_PORT="$SGLANG_TCP_STORE_PORT" \
     python3 -c '
 import hashlib
 import json
@@ -1371,7 +1378,7 @@ current_prefix = (
     + quote(os.environ["REPLACEMENT_ALLOCATION_ID"], safe="") + "/"
 )
 
-store = dist.TCPStore("127.0.0.1", 26555, world_size=None,
+store = dist.TCPStore("127.0.0.1", int(os.environ["TCP_STORE_PORT"]), world_size=None,
                       is_master=False, wait_for_workers=False)
 store.set_timeout(timedelta(seconds=5))
 stale_store = dist.PrefixStore(stale_prefix, store)
@@ -1647,6 +1654,9 @@ main() {
   validate_positive_integer POD_ACTIVE_DEADLINE_SECONDS "$POD_ACTIVE_DEADLINE_SECONDS"
   validate_positive_integer LOCAL_PORT "$LOCAL_PORT"
   (( LOCAL_PORT <= 65535 )) || die "LOCAL_PORT must be at most 65535"
+  validate_positive_integer SGLANG_TCP_STORE_PORT "$SGLANG_TCP_STORE_PORT"
+  (( SGLANG_TCP_STORE_PORT <= 65535 )) || \
+    die "SGLANG_TCP_STORE_PORT must be at most 65535"
   validate_bool KEEP_RESOURCES "$KEEP_RESOURCES"
   validate_bool RUN_UPSTREAM_PREFLIGHT "$RUN_UPSTREAM_PREFLIGHT"
   validate_kubectl_timeout
@@ -1707,6 +1717,9 @@ spec:
     - name: dist
       port: 26555
       targetPort: 26555
+    - name: global-tcp-store
+      port: ${SGLANG_TCP_STORE_PORT}
+      targetPort: ${SGLANG_TCP_STORE_PORT}
     - name: http
       port: 21000
       targetPort: 21000
