@@ -1,4 +1,5 @@
 import hashlib
+import json
 import os
 import subprocess
 import tempfile
@@ -15,6 +16,52 @@ register_cpu_ci(est_time=2, suite="base-a-test-cpu")
 
 
 class TestNixlEndpointScopeProbe(unittest.TestCase):
+    def _run_parity_probe(self, healthy_output_ids, recovered_output_ids):
+        script = (
+            Path(__file__).resolve().parents[4]
+            / "validation"
+            / "run_nixl_fixed_slot_recovery_k8s.sh"
+        )
+        with tempfile.TemporaryDirectory() as evidence_dir:
+            evidence = Path(evidence_dir)
+            (evidence / "healthy-rank1.json").write_text(
+                json.dumps(
+                    {"output_ids": healthy_output_ids, "meta_info": {"dp_rank": 1}}
+                )
+            )
+            (evidence / "recovered-rank1.json").write_text(
+                json.dumps(
+                    {"output_ids": recovered_output_ids, "meta_info": {"dp_rank": 1}}
+                )
+            )
+            env = os.environ.copy()
+            env["EVIDENCE_DIR"] = evidence_dir
+            result = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    """
+source "$1"
+if capture_rank1_output_parity; then
+  parity_rc=0
+else
+  parity_rc=$?
+fi
+printf '%s %s\n' "$parity_rc" "$RANK1_OUTPUT_PARITY"
+""",
+                    "bash",
+                    str(script),
+                ],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            proof = json.loads(
+                (evidence / "rank1-output-parity-proof.json").read_text()
+            )
+        return result, proof
+
     def test_probe_uses_durable_markers_after_endpoint_cleanup(self):
         store = dist.TCPStore(
             "127.0.0.1",
@@ -100,6 +147,7 @@ class TestNixlEndpointScopeProbe(unittest.TestCase):
                     """
 source "$1"
 capture_endpoint_scope_proof() { return 1; }
+capture_rank1_output_parity() { return 1; }
 generate() { inference_called=true; return 0; }
 record_recovered_rank_inference_result() { return 0; }
 mark_stage() { return 0; }
@@ -122,6 +170,30 @@ fi
                 check=False,
             )
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_rank1_output_parity_accepts_identical_output_ids(self):
+        result, proof = self._run_parity_probe(
+            [12095, 13, 99487, 11652], [12095, 13, 99487, 11652]
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "0 true")
+        self.assertTrue(proof["output_ids_equal"])
+        self.assertEqual(
+            proof["healthy_output_ids_sha256"], proof["recovered_output_ids_sha256"]
+        )
+
+    def test_rank1_output_parity_rejects_different_output_ids(self):
+        result, proof = self._run_parity_probe(
+            [12095, 13, 99487, 11652], [2130, 624, 61117, 198]
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "1 false")
+        self.assertFalse(proof["output_ids_equal"])
+        self.assertNotEqual(
+            proof["healthy_output_ids_sha256"], proof["recovered_output_ids_sha256"]
+        )
 
 
 if __name__ == "__main__":

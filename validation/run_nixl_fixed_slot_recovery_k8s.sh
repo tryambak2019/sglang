@@ -135,7 +135,9 @@ EVIDENCE_DIR="${EVIDENCE_DIR:-$(pwd)/recovery-evidence-${RUN_ID}}"
 PF_PID=""
 TEST_SUCCEEDED=false
 ENDPOINT_SCOPE_PROVED=false
+HEALTHY_RANK1_INFERENCE_SUCCEEDED=false
 RECOVERED_RANK_INFERENCE_SUCCEEDED=false
+RANK1_OUTPUT_PARITY=false
 VERDICT="INCONCLUSIVE"
 VERDICT_REASON="validation did not reach a conclusive NIXL recovery result"
 NIXL_RECOVERY_PRECONDITIONS_VERIFIED=false
@@ -361,7 +363,9 @@ write_summary() {
     echo "- Failed rank-1 Pod UID: \`${FAILED_POD_UID:-unavailable}\`"
     echo "- Replacement rank-1 Pod UID: \`${REPLACEMENT_POD_UID:-unavailable}\`"
     echo "- Endpoint scope proof passed: \`${ENDPOINT_SCOPE_PROVED}\`"
+    echo "- Healthy rank-1 inference passed: \`${HEALTHY_RANK1_INFERENCE_SUCCEEDED}\`"
     echo "- Recovered-rank inference passed: \`${RECOVERED_RANK_INFERENCE_SUCCEEDED}\`"
+    echo "- Rank-1 output parity passed: \`${RANK1_OUTPUT_PARITY}\`"
     echo "- GPU Pod active deadline: \`${POD_ACTIVE_DEADLINE_SECONDS}s\`"
     echo "- Exit code: \`${rc}\`"
     [[ -z "$FAILURE_MESSAGE" ]] || echo "- Error: ${FAILURE_MESSAGE}"
@@ -372,8 +376,8 @@ write_summary() {
     echo
     echo "## Verdict criteria"
     echo
-    echo "- **YES:** the correlated recovery reached \`ready\` for the expected operation, allocation, rank offset, and topology generation; TCPStore endpoint scope isolation was proved; then inference succeeded through recovered rank 1."
-    echo "- **NO:** after prerequisites and baseline succeeded, SGLang reported \`recovery_phase=failed\` and \`recovery_succeeded=false\` for that exact correlated NIXL fixed-slot recovery operation."
+    echo "- **YES:** the correlated recovery reached \`ready\` for the expected operation, allocation, rank offset, and topology generation; TCPStore endpoint scope isolation was proved; then replacement rank 1 produced exactly the same \`output_ids\` as healthy rank 1 for an identical deterministic request."
+    echo "- **NO:** after prerequisites and healthy rank-1 baseline succeeded, either SGLang reported a correlated terminal recovery failure or recovered rank 1 failed exact deterministic \`output_ids\` parity."
     echo "- **INCONCLUSIVE:** RBAC, image, model, scheduling, network, RDMA, timeout, pod, evidence, or any uncorrelated/unclassified failure prevented a valid YES/NO result."
     echo
     echo "## Evidence"
@@ -428,7 +432,9 @@ collect_evidence() {
     echo "exit_code=$rc"
     echo "test_succeeded=$TEST_SUCCEEDED"
     echo "endpoint_scope_proved=$ENDPOINT_SCOPE_PROVED"
+    echo "healthy_rank1_inference_succeeded=$HEALTHY_RANK1_INFERENCE_SUCCEEDED"
     echo "recovered_rank_inference_succeeded=$RECOVERED_RANK_INFERENCE_SUCCEEDED"
+    echo "rank1_output_parity=$RANK1_OUTPUT_PARITY"
     echo "nixl_recovery_preconditions_verified=$NIXL_RECOVERY_PRECONDITIONS_VERIFIED"
     echo "verdict=$VERDICT"
     printf 'verdict_reason=%q\n' "$VERDICT_REASON"
@@ -1308,7 +1314,9 @@ generate() {
     -d "$payload" \
     "http://127.0.0.1:${LOCAL_PORT}/generate" \
     | tee "$EVIDENCE_DIR/${label}.json" \
-    | jq -e 'has("text") or has("output_ids")' >/dev/null
+    | jq -e --argjson routed_rank "$routed_rank" \
+      '(.output_ids | type == "array" and length > 0) and
+       .meta_info.dp_rank == $routed_rank' >/dev/null
 }
 
 get_state() {
@@ -1461,6 +1469,45 @@ record_recovered_rank_inference_result() {
     >"$EVIDENCE_DIR/recovered-rank1-inference-proof.json"
 }
 
+capture_rank1_output_parity() {
+  local healthy="$EVIDENCE_DIR/healthy-rank1.json"
+  local recovered="$EVIDENCE_DIR/recovered-rank1.json"
+  local healthy_sha256 recovered_sha256 healthy_count recovered_count
+  local output_ids_equal=false
+
+  [[ -s "$healthy" && -s "$recovered" ]] || return 1
+  healthy_sha256="$(jq -c '.output_ids' "$healthy" | sha256sum | cut -d' ' -f1)"
+  recovered_sha256="$(jq -c '.output_ids' "$recovered" | sha256sum | cut -d' ' -f1)"
+  healthy_count="$(jq '.output_ids | length' "$healthy")"
+  recovered_count="$(jq '.output_ids | length' "$recovered")"
+  if jq -e -n \
+    --slurpfile healthy "$healthy" \
+    --slurpfile recovered "$recovered" \
+    '$healthy[0].output_ids == $recovered[0].output_ids' >/dev/null; then
+    output_ids_equal=true
+    RANK1_OUTPUT_PARITY=true
+  fi
+
+  jq -n \
+    --argjson output_ids_equal "$output_ids_equal" \
+    --argjson healthy_dp_rank "$(jq '.meta_info.dp_rank' "$healthy")" \
+    --argjson recovered_dp_rank "$(jq '.meta_info.dp_rank' "$recovered")" \
+    --argjson healthy_token_count "$healthy_count" \
+    --argjson recovered_token_count "$recovered_count" \
+    --arg healthy_output_ids_sha256 "$healthy_sha256" \
+    --arg recovered_output_ids_sha256 "$recovered_sha256" \
+    '{output_ids_equal:$output_ids_equal,
+      healthy_dp_rank:$healthy_dp_rank,
+      recovered_dp_rank:$recovered_dp_rank,
+      healthy_token_count:$healthy_token_count,
+      recovered_token_count:$recovered_token_count,
+      healthy_output_ids_sha256:$healthy_output_ids_sha256,
+      recovered_output_ids_sha256:$recovered_output_ids_sha256}' \
+    >"$EVIDENCE_DIR/rank1-output-parity-proof.json"
+
+  [[ "$output_ids_equal" == true ]]
+}
+
 collect_post_recovery_evidence() {
   local runtime_instance_id="$1"
   if capture_endpoint_scope_proof "$runtime_instance_id"; then
@@ -1480,8 +1527,17 @@ collect_post_recovery_evidence() {
     warn "Recovered-rank inference failed; preserving its evidence independently from the scope probe"
     mark_stage recovered-rank1-inference failed
   fi
+  if [[ "$RECOVERED_RANK_INFERENCE_SUCCEEDED" == true ]] && \
+    capture_rank1_output_parity; then
+    note "Replacement rank 1 exactly matched healthy rank-1 output_ids"
+    mark_stage rank1-output-parity verified
+  else
+    warn "Replacement rank 1 did not prove exact output_ids parity with healthy rank 1"
+    mark_stage rank1-output-parity failed
+  fi
   [[ "$ENDPOINT_SCOPE_PROVED" == true && \
-     "$RECOVERED_RANK_INFERENCE_SUCCEEDED" == true ]]
+     "$RECOVERED_RANK_INFERENCE_SUCCEEDED" == true && \
+     "$RANK1_OUTPUT_PARITY" == true ]]
 }
 
 wait_for_recovery_ready() {
@@ -1753,8 +1809,11 @@ EOF
   kube_with_timeout "$COMMAND_TIMEOUT_SECONDS" exec -n "$NAMESPACE" "$PRIMARY_POD" -- python3 -c \
     'from sglang.srt.layers.moe.token_dispatcher.nixl import NixlEPBuffer; assert hasattr(NixlEPBuffer,"prepare_recovery"); assert hasattr(NixlEPBuffer,"connect_recovery")'
 
-  note "Baseline inference"
-  generate baseline
+  note "Baseline inference through primary rank 0"
+  generate baseline 0
+  note "Deterministic baseline inference through healthy rank 1"
+  generate healthy-rank1 1
+  HEALTHY_RANK1_INFERENCE_SUCCEEDED=true
   get_state | tee "$EVIDENCE_DIR/state-before-failure.json" | jq -e \
     '.allocation_width == 1 and .effective_ep_size == 2 and .recovery_phase == "idle"' >/dev/null
   local runtime_instance_id
@@ -1893,10 +1952,15 @@ EOF
         "$RECOVERED_RANK_INFERENCE_SUCCEEDED" != true ]]; then
     die "recovery reached ready but endpoint scope proof and recovered-rank inference did not both pass (endpoint_scope_proved=$ENDPOINT_SCOPE_PROVED recovered_rank_inference_succeeded=$RECOVERED_RANK_INFERENCE_SUCCEEDED)"
   fi
+  if [[ "$RANK1_OUTPUT_PARITY" != true ]]; then
+    VERDICT="NO"
+    VERDICT_REASON="recovery reached ready, but replacement rank 1 did not reproduce healthy rank 1 output_ids for the identical deterministic request"
+    die "VERDICT=NO: $VERDICT_REASON"
+  fi
 
   TEST_SUCCEEDED=true
   VERDICT="YES"
-  VERDICT_REASON="correlated fixed-slot recovery reached ready, TCPStore endpoint scope isolation was proved, and inference completed through recovered rank 1"
+  VERDICT_REASON="correlated fixed-slot recovery reached ready, TCPStore endpoint scope isolation was proved, and replacement rank 1 exactly reproduced healthy rank-1 output_ids"
   succeed "VERDICT=YES: $VERDICT_REASON"
   mark_stage validation complete
 }
